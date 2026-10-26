@@ -30,7 +30,7 @@ if [ "$mode" != '--update-console' ]; then
 fi
 install -m 0644 "$base/taco-console/geoip.py" /opt/taco-console/geoip.py
 install -m 0644 "$base/update_geoip.py" /opt/taco-console/update_geoip.py
-for asset in index.html app.js style.css; do
+for asset in index.html app.js preferences.js atlas.js world.json style.css; do
     install -m 0644 "$base/taco-console/static/$asset" "/opt/taco-console/static/$asset"
 done
 if [ "$mode" = '--update-console' ]; then

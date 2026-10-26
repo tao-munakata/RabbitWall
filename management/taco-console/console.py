@@ -315,10 +315,10 @@ def make_handler(state_path, port, demo=False, control_callback=None, token_file
                     status, mime = 503, "application/json; charset=utf-8"
                     payload = json.dumps({"error": "収集データを読み込めません。collectorサービスを確認してください。",
                                           "detail": str(exc)[:200]}, ensure_ascii=False).encode()
-            elif path in {"/", "/index.html", "/app.js", "/style.css"}:
+            elif path in {"/", "/index.html", "/app.js", "/preferences.js", "/atlas.js", "/world.json", "/style.css"}:
                 filename = "index.html" if path == "/" else path[1:]
                 mime = {"html": "text/html; charset=utf-8", "js": "text/javascript; charset=utf-8",
-                        "css": "text/css; charset=utf-8"}[filename.split(".")[-1]]
+                        "css": "text/css; charset=utf-8", "json": "application/json; charset=utf-8"}[filename.split(".")[-1]]
                 payload = (STATIC / filename).read_bytes()
             else:
                 self.send_error(404)

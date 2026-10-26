@@ -265,6 +265,18 @@ class HTTP(unittest.TestCase):
         self.assertIn(b"403", self.request("/api/state", headers="Sec-Fetch-Site: cross-site\r\n"))
         self.assertIn(b"404", self.request("/../console.py"))
 
+    def test_atlas_assets_are_served_locally(self):
+        script = self.request("/atlas.js")
+        self.assertIn(b"200 OK", script.split(b"\r\n\r\n",1)[0])
+        self.assertIn(b"text/javascript", script)
+        preference = self.request("/preferences.js")
+        self.assertIn(b"200 OK", preference.split(b"\r\n\r\n", 1)[0])
+        self.assertIn(b"text/javascript", preference)
+        response = self.request("/world.json")
+        head, body = response.split(b"\r\n\r\n",1)
+        self.assertIn(b"application/json",head)
+        self.assertTrue(json.loads(body)["countries"]["JP"]["point"])
+
     def test_missing_collector_state_is_unavailable(self):
         self.assertIn(b"503", self.request("/api/state", demo=False))
 

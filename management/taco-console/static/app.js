@@ -1,8 +1,28 @@
 "use strict";
 let snapshot = null, tab = "flows";
 let control = null, controlBusy = false, controlDemo = false, controlEpoch = 0;
-let activeToken = "";
+let activeToken = "", tokenSaved = false;
+const tokenPreference = new window.TokenPreference();
 const $ = id => document.getElementById(id);
+let sessionView = "map";
+const atlas = new window.SessionAtlas({canvas:$("atlas-canvas"), list:$("atlas-routes"),
+  detail:$("atlas-detail"), summary:$("atlas-summary"), onInspect:address => {
+    $("search").value = address; setSessionView("table"); render();
+  },onSelectionChange:key=>{$("atlas-clear").disabled=!key;}});
+$("atlas-pause").setAttribute("aria-pressed", String(atlas.paused));
+$("atlas-pause").textContent = atlas.paused ? "動 / 演出再開" : "止 / 演出停止";
+function setSessionView(view) {
+  const page=view==="map" ? "monitor" : "sessions";
+  if(location.hash.slice(1)===page)navigate();else location.hash=page;
+}
+function resetAtlasView() {
+  $("search").value="";$("scope").value="related";$("proto").value="all";tab="flows";
+  for(const name of Object.keys(heads)){$("tab-"+name).classList.toggle("selected",name===tab);$("tab-"+name).setAttribute("aria-selected",String(name===tab));}
+  atlas.clearSelection();atlas.setPaused(atlas.initialPaused);
+  $("atlas-pause").setAttribute("aria-pressed",String(atlas.paused));$("atlas-pause").textContent=atlas.paused ? "動 / 演出再開" : "止 / 演出停止";
+  atlas.resetPosition();
+  setSessionView("map");render();
+}
 const heads = {
   flows: ["方向", "送信元", "宛先", "宛先国", "サービス", "状態", "送信 / 受信", "初回観測"],
   history: ["方向", "送信元", "宛先", "宛先国", "サービス", "観測状態", "送信 / 受信", "最終観測"],
@@ -19,21 +39,32 @@ function countryText(info) {
 }
 function direction(flow) {
   const taco = ["10.2.0.2", "10.1.0.1"].includes(flow.dst);
-  return flow.scope === "MANAGEMENT" ? taco ? "LAN → TACO" : "LAN → AI" : flow.scope === "TACO" ? "TACO発信" : taco ? "AI → TACO" : "AI → 上流";
+  return flow.scope === "MANAGEMENT" ? taco ? "LAN → Radxa" : "LAN → AI" : flow.scope === "TACO" ? "Radxa発信" : taco ? "AI → Radxa" : "AI → 上流";
 }
 function navigate() {
-  const pages = {monitor:["セッション・死活監視", "接続中の通信と、主要ノードの状態。"], settings:["設定", "操作キーと、国別IPデータの設定。"], topology:["ネットワーク構成", "開発NWの接続とアドレスの参考情報。"]};
+  const pages = {monitor:"広域通信監視",sessions:"通信記録一覧",settings:"環境設定",topology:"構成情報"};
   const page = Object.hasOwn(pages, location.hash.slice(1)) ? location.hash.slice(1) : "monitor";
   for (const element of document.querySelectorAll("[data-page]")) element.hidden = element.dataset.page !== page;
   for (const link of document.querySelectorAll("[data-nav]")) {
     link.classList.toggle("active", link.dataset.nav === page);
     if (link.dataset.nav === page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
   }
-  $("page-title").textContent = pages[page][0]; $("page-description").textContent = pages[page][1];
+  $("page-title").textContent = pages[page];
+  document.body.classList.toggle("monitor-mode",page==="monitor");
+  document.body.classList.toggle("workspace-mode",page==="monitor" || page==="sessions");
+  if(page==="monitor" || page==="sessions"){
+    sessionView=page==="monitor" ? "map" : "table";
+    $(page==="monitor" ? "map-controls" : "list-controls").append($("session-controls"));
+    for(const name of ["map","table"]){$("view-"+name).classList.toggle("selected",sessionView===name);$("view-"+name).setAttribute("aria-pressed",String(sessionView===name));}
+  }
+  atlas.setActive(page === "monitor");
+  render();
 }
 function renderGeoip() {
   const data = snapshot?.geoip;
-  $("geoip-status").textContent = data?.available ? "利用可能" : "未導入・利用不可";
+  $("geoip-status").textContent = data?.available ? "有" : "無";
+  $("geoip-status").title=data?.available ? "国別IPデータを利用可能" : "国別IPデータが未導入または利用不可";
+  $("geoip-status").setAttribute("aria-label",$("geoip-status").title);
   $("geoip-status").className = "badge " + (data?.available ? "good" : "warn");
   $("geoip-source").textContent = data?.source || "DB-IP Lite";
   $("geoip-edition").textContent = data?.edition || "—";
@@ -51,26 +82,36 @@ function cell(row, value, className = "") {
 }
 function renderControl() {
   const known = control && control.available && !control.error;
-  $("gate-state").textContent = known ? control.enabled ? "ON · 接続を許可" : "OFF · 遮断中" : "状態不明";
-  $("gate-state").className = "gate-state " + (known ? control.enabled ? "online" : "offline" : "unknown");
+  const state = known ? control.enabled ? "online" : "offline" : "unknown";
+  $("gate-panel").dataset.state=state;
+  $("gate-panel").setAttribute("aria-busy",String(controlBusy));
+  $("gate-state").textContent = known ? control.enabled ? "開" : "閉" : "不明";
+  $("gate-caption").textContent = known ? control.enabled ? "インターネット接続を許可中" : "インターネット接続を遮断中" : "現在の接続状態を確認できません";
+  $("gate-state").className = "gate-state " + state;
   const hasKey = controlDemo || activeToken.length > 0;
-  $("internet-on").disabled = !known || controlBusy || control.enabled || !hasKey;
-  $("internet-off").disabled = controlBusy || !hasKey || (known && !control.enabled);
+  $("internet-toggle").disabled=controlBusy || !hasKey;
+  $("internet-toggle").setAttribute("aria-checked",String(Boolean(known && control.enabled)));
+  $("internet-toggle").setAttribute("aria-label",known ? "AIセグメントの対外接続" : "AIセグメントの対外接続・状態不明（操作すると閉じます）");
+  $("internet-toggle").title=controlBusy ? "変更中…" : known ? control.enabled ? "接続を閉じる" : "接続を開く" : "接続を閉じる（現在の状態は不明）";
   $("key-link").hidden = hasKey;
-  $("key-status").textContent = controlDemo ? "デモ・キー不要" : activeToken ? "設定済み" : "未設定";
+  $("key-status").textContent = controlDemo ? "試" : activeToken ? "済" : "未";
+  $("key-status").title=controlDemo ? "試験表示・キー不要" : activeToken ? tokenSaved ? "ブラウザーに保存済み" : "この画面に設定済み" : "操作キー未設定";
+  $("key-status").setAttribute("aria-label",$("key-status").title);
   $("key-status").className = "badge " + (hasKey ? "good" : "warn");
   $("nodes").replaceChildren();
   for (const node of control?.nodes || []) {
     const row = document.createElement("div"); row.className = "node-row";
     const identity = document.createElement("div"), title = document.createElement("strong"), ip = document.createElement("code");
-    title.textContent = node.name; ip.textContent = node.ip; identity.append(title, ip);
-    const detail = document.createElement("div"), status = document.createElement("span"), last = document.createElement("small");
-    status.className = "badge " + (node.state === "up" ? "good" : "warn");
-    status.textContent = node.state === "up" ? "正常" + (node.latency_ms === null ? "" : " · " + node.latency_ms + " ms") : node.state === "no_reply" ? "応答なし" : "確認不能";
+    title.textContent = ({openwrt:"Netgear",taco:"Radxa",spark:"Sun SPARC",dgx:"Sun SPARC"})[node.id] || ({OpenWrt:"Netgear",TACO:"Radxa","DGX Spark":"Sun SPARC"})[node.name] || node.name; ip.textContent = node.ip; identity.append(title, ip);
+    const status = document.createElement("span"), last = document.createElement("small");
+    status.className = "node-state " + (node.state === "up" ? "good" : "warn");
+    status.textContent = node.state === "up" ? "正" : node.state === "no_reply" ? "断" : "不";
+    let description=node.state==="up" ? "正常" : node.state==="no_reply" ? "応答なし" : "確認不能";
     const age = Date.now() - new Date(node.checked_at).getTime();
-    if (!control.available || age > 30000) { status.textContent = !control.available ? "状態未確認" : "監視データが古い"; status.className = "badge warn"; }
-    last.textContent = "確認 " + clock(node.checked_at) + " / 最終正常 " + clock(node.last_success);
-    detail.append(status, last); row.append(identity, detail); $("nodes").append(row);
+    if (!control.available || age > 30000) { status.textContent = !control.available ? "不" : "古"; status.className = "node-state warn";description=!control.available ? "状態未確認" : "監視データが古い"; }
+    status.title=description;status.setAttribute("aria-label",description);
+    last.textContent = (node.latency_ms == null ? "LOCAL" : node.latency_ms+" ms") + " / " + clock(node.checked_at);
+    last.title="最終正常 "+clock(node.last_success);identity.append(last);row.append(status,identity);$("nodes").append(row);
   }
   if (!(control?.nodes || []).length) { const p = document.createElement("p"); p.className = "muted"; p.textContent = "監視データはまだありません。"; $("nodes").append(p); }
   if (snapshot) snapshot.control = control;
@@ -82,7 +123,7 @@ async function refreshControl() {
     const data = await response.json(); if (!response.ok) throw new Error(data.error || "状態取得失敗");
     if (epoch !== controlEpoch || controlBusy) return;
     control = data.control; controlDemo = data.demo; renderControl();
-    $("control-message").textContent = controlDemo ? "デモ操作です。実際の通信設定は変更しません。" : control.error || "再起動時はOFF。ONは画面を閉じても維持され、制御停止時は最大20秒でOFFになります。";
+    $("control-message").textContent = controlDemo ? "試験表示・実機操作なし" : control.error || "管理SSH・Radxa自身の通信は維持";
   } catch (e) {
     if (epoch !== controlEpoch || controlBusy) return;
     control = {available:false, nodes:control?.nodes || [], error:e.message}; renderControl();
@@ -96,7 +137,7 @@ async function setInternet(enabled) {
     const response = await fetch("/api/internet", {method:"POST", headers:{"Content-Type":"application/json", "Authorization":"Bearer " + activeToken}, body:JSON.stringify({enabled}), signal:AbortSignal.timeout(10000)});
     const data = await response.json(); if (!response.ok) throw new Error(data.error || "変更失敗");
     control = data.control; controlDemo = data.demo;
-    $("control-message").textContent = controlDemo ? "デモ表示を" + (enabled ? "ON" : "OFF") + "にしました。実機は変更していません。" : enabled ? "ONを確認しました。元のFirewallで許可した外向き通信が可能です。" : "OFFを確認しました。既存の外部通信も遮断しています。";
+    $("control-message").textContent = controlDemo ? "試験 / " + (enabled ? "開" : "閉") : enabled ? "対外接続を許可しました" : "既存の外部通信も遮断しました";
   } catch (e) {
     // A timed-out response does not establish whether the change took effect.
     control = {available:false, nodes:control?.nodes || [], error:e.message};
@@ -117,13 +158,14 @@ function render() {
   $("updated").textContent = "最終収集 " + clock(snapshot.updated_at);
   const notices = [...snapshot.errors];
   if (snapshot.stale) notices.unshift("収集データが古くなっています。collectorサービスを確認してください。");
-  if (snapshot.demo) notices.unshift("デモ表示です。表示中の通信は実機の通信ではありません。");
   $("notice").hidden = !notices.length; $("notice").textContent = notices.join("\n");
   renderGeoip();
   const search = $("search").value.toLowerCase(), scope = $("scope").value, proto = $("proto").value;
-  const rows = snapshot[tab].filter(f => (scope === "all" || (scope === "related" ? ["AI", "MANAGEMENT"].includes(f.scope) : f.scope === scope)) && (proto === "all" || f.proto === proto) &&
-    [f.src, f.dst, f.sport, f.dport, f.proto, f.service, f.state, f.chain, direction(f), countryText(f.src_country), countryText(f.dst_country)].join(" ").toLowerCase().includes(search));
+  const matches = f => (scope === "all" || (scope === "related" ? ["AI", "MANAGEMENT"].includes(f.scope) : f.scope === scope)) && (proto === "all" || f.proto === proto) &&
+    [f.src, f.dst, f.sport, f.dport, f.proto, f.service, f.state, f.chain, direction(f), countryText(f.src_country), countryText(f.dst_country)].join(" ").toLowerCase().includes(search);
+  const rows = snapshot[tab].filter(matches);
   $("row-count").textContent = rows.length + " 件";
+  atlas.update(rows, {kind:tab, stale:snapshot.stale || !snapshot.collector_ok});
   $("table-head").replaceChildren(); const header = document.createElement("tr");
   for (const title of heads[tab]) { const th = document.createElement("th"); th.textContent = title; header.append(th); } $("table-head").append(header);
   $("rows").replaceChildren();
@@ -146,7 +188,7 @@ function render() {
     ? "直近5分・最大200件。既存FWのログに記録された拒否のみ表示します。レート制限やログのないルールによる拒否は含みません。"
     : tab === "history"
     ? "約5秒ごとの観測履歴から直近500件を表示。終了済みの保存は24時間・全体目安2万件。短い通信は見逃す場合があります。観測終了はTCP切断時刻ではありません。"
-    : "TACOを通る通信を両方向の開始元で表示。LAN → AIの管理SSHも含みます。送受信量は開始元を基準にした累計、国はIPからの概算です。";
+    : "Radxaを通る通信を両方向の開始元で表示。LAN → AIの管理SSHも含みます。送受信量は開始元を基準にした累計、国はIPからの概算です。";
 }
 async function refresh() {
   try {
@@ -168,17 +210,60 @@ $("export").addEventListener("click", () => {
   const a = document.createElement("a"); a.href = url; a.download = "taco-sessions-" + new Date().toISOString().replace(/[:.]/g,"-") + ".json"; a.click(); setTimeout(() => URL.revokeObjectURL(url),1000);
 });
 refresh();
+function saveTokenPreference(remember) {
+  const result=tokenPreference.save(activeToken,remember);
+  tokenSaved=result.saved;
+  $("key-message").textContent=result.error
+    ? "キーはこの画面で使用できますが、ブラウザーの保存・削除に失敗しました。ブラウザーのサイトデータ設定を確認してください。"
+    : result.saved ? "このブラウザーに保存しました。次回は自動で読み込みます。"
+    : "キーはこの画面だけで使用します。保存済みのキーは削除しました。";
+  renderControl();
+  return result;
+}
+const restoredToken=tokenPreference.read();
+activeToken=restoredToken.token;tokenSaved=Boolean(activeToken);
+$("remember-token").checked=tokenSaved;
+if(tokenSaved)$("key-message").textContent="保存済みの操作キーを読み込みました。";
 $("key-form").addEventListener("submit", event => {
   event.preventDefault();
-  const token = $("control-token").value.trim();
+  const token = $("control-token").value.trim() || activeToken;
   if (!token) { $("key-message").textContent = "操作キーを入力してください。"; return; }
   activeToken = token; $("control-token").value = "";
-  $("key-message").textContent = "この画面に設定しました。メニュー移動後も使用できます。ページ再読み込みで消えます。";
-  renderControl();
+  saveTokenPreference($("remember-token").checked);
 });
-$("clear-key").addEventListener("click", () => { activeToken = ""; $("control-token").value = ""; $("key-message").textContent = "操作キーを消去しました。"; renderControl(); });
-$("internet-on").addEventListener("click", () => setInternet(true));
-$("internet-off").addEventListener("click", () => setInternet(false));
+$("remember-token").addEventListener("change",()=>{
+  if(!$("remember-token").checked)saveTokenPreference(false);
+});
+$("clear-key").addEventListener("click", () => {
+  activeToken="";$("control-token").value="";$("remember-token").checked=false;
+  const result=saveTokenPreference(false);
+  if(!result.error)$("key-message").textContent="操作キーを消去しました。";
+});
+$("internet-toggle").addEventListener("click", () => setInternet(Boolean(control?.available && !control.error && !control.enabled)));
+$("view-map").addEventListener("click", () => setSessionView("map"));
+$("view-table").addEventListener("click", () => setSessionView("table"));
+$("atlas-pause").addEventListener("click", () => {
+  atlas.setPaused(!atlas.paused); $("atlas-pause").setAttribute("aria-pressed", String(atlas.paused));
+  $("atlas-pause").textContent = atlas.paused ? "動 / 演出再開" : "止 / 演出停止";
+});
+$("atlas-clear").addEventListener("click",()=>atlas.clearSelection());
+$("atlas-reset").addEventListener("click",resetAtlasView);
 window.addEventListener("hashchange", navigate);
 navigate();
 refreshControl();
+
+function applyTheme(value) {
+  const name = Object.hasOwn(window.SessionAtlas.themes,value) ? value : "amber";
+  document.documentElement.dataset.theme=name;
+  $("color-scheme").value=name;
+  atlas.setTheme(name);
+  return name;
+}
+let savedTheme="amber";
+try { savedTheme=localStorage.getItem("taco-color-scheme") || "amber"; } catch (_) {}
+applyTheme(savedTheme);
+$("color-scheme").addEventListener("change",()=>{
+  const name=applyTheme($("color-scheme").value);
+  try { localStorage.setItem("taco-color-scheme",name);$("theme-message").textContent="配色をこのブラウザーに保存しました。"; }
+  catch (_) { $("theme-message").textContent="配色を変更しました。ブラウザーに保存できないため、再読み込みすると元に戻ります。"; }
+});
