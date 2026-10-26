@@ -1,0 +1,21 @@
+# Local OS and Python files
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# Device-specific settings, generated files, and device backups
+/config.json
+/output/
+/openwrt/
+
+# Collected reports and runtime data
+version-reports/
+.demo-state/
+*.sqlite3
+*.sqlite3-*
+control.token
+
+# Local credentials
+.env
+.env.*
+!.env.example

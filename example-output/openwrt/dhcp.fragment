@@ -1,0 +1,6 @@
+config dhcp 'ai_transit'
+        option interface 'ai_transit'
+        option ignore '1'
+        option ra 'disabled'
+        option dhcpv6 'disabled'
+        option ndp 'disabled'

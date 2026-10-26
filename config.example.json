@@ -1,0 +1,6 @@
+{
+  "admin_ipv4": "10.0.0.10",
+  "openwrt_ai_device": "lan4",
+  "rpi_uplink_if": "eth0",
+  "rpi_ai_if": "eth1"
+}

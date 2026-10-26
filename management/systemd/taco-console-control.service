@@ -1,0 +1,31 @@
+[Unit]
+Description=TACO internet gate and node health controller
+Requires=nftables.service
+After=nftables.service network.target
+Before=taco-console-web.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/taco-console/control.py run
+ExecStopPost=/usr/bin/python3 /opt/taco-console/control.py off
+Restart=on-failure
+RestartSec=3
+User=root
+Group=taco-console-control
+RuntimeDirectory=taco-console
+RuntimeDirectoryMode=0750
+UMask=0027
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+MemoryMax=96M
+
+[Install]
+WantedBy=multi-user.target

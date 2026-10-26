@@ -1,0 +1,27 @@
+[Unit]
+Description=TACO read-only conntrack and firewall log collector
+After=network.target nftables.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/taco-console/console.py collect
+Restart=on-failure
+RestartSec=5
+User=root
+StateDirectory=taco-console
+StateDirectoryMode=0755
+UMask=0027
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+CapabilityBoundingSet=CAP_NET_ADMIN
+MemoryMax=192M
+
+[Install]
+WantedBy=multi-user.target
