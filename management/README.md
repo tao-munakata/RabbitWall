@@ -9,12 +9,17 @@ TACO上の通信・死活監視Webコンソール、AI側インターネットON
 ### 確認できるもの
 
 - 現在のIPv4追跡エントリ：送信元／宛先IP・ポート、プロトコル、TCP状態、接続単位の送受信バイト数。
-- AI網から開始した通信を既定表示。TACO自身の通信もフィルターで選択可能。
+- AI発信とLAN→AI／TACOの管理通信を既定表示。TACO自身の発信もフィルターで選択可能。
 - 観測履歴：5秒間隔で記録し、画面には直近500件。終了済みの保持は24時間、現在分を含む件数の目安は2万件。現在追跡中の通信は削除対象外。
 - 拒否ログ：直近5分、抽出前最大1000ログ・画面最大200件。`taco-input-drop` / `taco-forward-drop` / `taco-output-drop` を対象とする。
 - IP・ポート・状態で検索、プロトコル別表示、収集スナップショットのJSON保存。
 - OpenWrt・TACO・DGXの死活状態、最終正常確認時刻、Pingの応答時間。
 - 操作キーでAI側のインターネット通信をON/OFF。実際のカーネル状態を確認して表示する。
+- 公開IPv4の国をローカルデータから推定表示。LAN内・予約／特殊アドレス・不明を区別する。
+
+画面はダーク調で、ホームは死活監視とセッション一覧を優先する。「設定」に操作キーと国別IPデータの状態、「ネットワーク構成」に参考の構成図をまとめる。
+既定の「AI関連すべて」は、AI発信に加えて `10.0.0.0/24` → AI網／TACOの接続を含む。以前の版は開始元がAI／TACOの通信だけを収集していたため、管理PCからSparkへ開始したSSHを表示できなかった。
+最新版のcollectorに更新すると、接続中の管理SSHも次の収集から表示できる。過去に収集していない履歴は復元しない。表示対象の追加によってFWの許可範囲は変更しない。
 
 収集元は `conntrack -L -f ipv4 -o extended,id` と `journalctl -k`。既存nftablesのログは拒否通信が中心なので、それだけから許可セッションを再構成しない。
 
@@ -67,6 +72,16 @@ sudo systemctl status taco-console-collector taco-console-control taco-console-w
 
 `collector` はrootで接続情報を読む。`control` はrootで固定対象のPingと固定ゲートのみを操作する。WebサーバーはsystemdのDynamicUserで動作し、専用グループのUnix socketを通じてstatus/enable/disableのみを要求する。HTTPから任意のコマンド・IP・ルールは受け付けない。3サービスとも通常は `active (running)`。
 
+### 導入済みコンソールのUI・収集処理だけを更新
+
+上記と同じ方法で最新の `management/.` をTACOの `~/network-management/` に転送後、TACOで実行する。
+
+```sh
+sudo sh ~/network-management/install-console.sh --update-console
+```
+
+このモードはWeb資材・collector・国表示用コードを更新してcollectorとWebを再起動する。controlサービス・FW・操作キーの生成処理は実行しないため、現在のインターネットON/OFF状態を維持する。更新後はブラウザーを再読み込みする。
+
 バイト数が `—` になる場合、接続追跡のアカウンティングが無効、または無効時に作られた接続の可能性がある。必要ならTACOで次を実行する。これはFWの許可範囲を変更しない。
 
 ```sh
@@ -105,13 +120,13 @@ Webとの接続断や制御サービス停止時は、状態不明・監視デ�
 
 ### AI側インターネットON/OFF
 
-TACOで操作キーを確認し、Web画面の「操作キー」に入力する。
+TACOで操作キーを確認し、Web画面の「設定」→「操作キー」に入力して「この画面で使用」を押す。
 
 ```sh
 sudo cat /etc/taco-console/control.token
 ```
 
-キーはブラウザーの永続ストレージに保存しない。画面再読み込み後は再入力する。状態の閲覧には不要。
+キーはメモリーだけに保持し、入力欄は設定後に空にする。ブラウザーの永続ストレージには保存しない。メニュー移動後も使用でき、画面再読み込み後は再入力する。「キーを消去」で保持している値を破棄できる。状態の閲覧には不要。
 HTTP操作は同一Origin、固定JSON形式、Bearerキーを検証する。キーをURLやレポートに含めない。
 
 | 通信 | OFF | ON |
@@ -175,6 +190,39 @@ python3 management/taco-console/console.py demo
 ```
 
 [デモ画面](http://127.0.0.1:8765) にはDEMOラベルを表示する。例示用宛先IPを使用し、実際の通信結果と区別する。
+
+### 国別IPデータの導入・更新
+
+追加のPythonライブラリ・登録・APIキーは不要。TACOで次を実行し、DB-IP公式の月次Country Liteデータを一括取得する。
+
+```sh
+sudo python3 /opt/taco-console/update_geoip.py
+```
+
+公開データのCSVをIPv4用SQLiteへ変換し、`/var/lib/taco-console/geoip-country.sqlite3` に保存する。IPv6の通信収集・国照合は今回の対象外。閲覧時はこのファイルを読み取り専用で照合し、セッションのIPを外部へ送信しない。ブラウザーの「設定」でデータ版・導入状態を確認できる。更新後はファイル変更を自動検出し、サービス再起動は不要。
+データ取得に失敗した場合は既存データを維持する。当月版がまだ公開されていない場合などは `--month 2026-10` のように公開済みの年月を指定できる。
+
+管理PCでデータを作成して転送することもできる。
+
+```sh
+python3 management/update_geoip.py --output output/geoip-country.sqlite3
+scp output/geoip-country.sqlite3 YOUR_USER@10.2.0.2:~/geoip-country.sqlite3
+```
+
+続いてTACOで保存する。
+
+```sh
+sudo install -m 0644 ~/geoip-country.sqlite3 /var/lib/taco-console/geoip-country.sqlite3
+```
+
+データ未導入でも通信監視は動作し、公開IPの国は「不明」と表示する。LAN内は「LAN」、予約／特殊アドレスは「予約・特殊」。国旗・国名・国コードを表示し、国名・国コードでも検索できる。登録地域・CDN・VPNなどの影響があるため、結果は国の概算として扱う。
+出典：[DB-IP Lite](https://db-ip.com/db/lite.php)、[CSV仕様](https://db-ip.com/db/format/ip-to-country-lite/csv.html)。CC BY 4.0に従い、結果を使う画面には [IP Geolocation by DB-IP](https://db-ip.com) のリンクを表示する。
+
+国表示付きのローカルデモ：
+
+```sh
+python3 management/taco-console/console.py demo --geoip-db output/geoip-country.sqlite3
+```
 
 ## 2. バージョン収集・更新候補確認
 

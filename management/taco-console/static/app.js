@@ -1,12 +1,45 @@
 "use strict";
 let snapshot = null, tab = "flows";
 let control = null, controlBusy = false, controlDemo = false, controlEpoch = 0;
+let activeToken = "";
 const $ = id => document.getElementById(id);
 const heads = {
-  flows: ["送信元", "宛先", "サービス", "状態", "送信 / 受信", "初回観測"],
-  history: ["送信元", "宛先", "サービス", "観測状態", "送信 / 受信", "最終観測"],
-  drops: ["送信元", "宛先", "プロトコル", "チェーン", "受信 → 送信IF", "時刻"]
+  flows: ["方向", "送信元", "宛先", "宛先国", "サービス", "状態", "送信 / 受信", "初回観測"],
+  history: ["方向", "送信元", "宛先", "宛先国", "サービス", "観測状態", "送信 / 受信", "最終観測"],
+  drops: ["方向", "送信元", "宛先", "宛先国", "プロトコル", "チェーン", "受信 → 送信IF", "時刻"]
 };
+let countryNames;
+try { countryNames = new Intl.DisplayNames(["ja"], {type:"region"}); } catch (_) { countryNames = null; }
+function countryText(info) {
+  if (info?.kind === "private") return "LAN";
+  if (info?.kind === "special") return "予約・特殊";
+  if (!/^[A-Z]{2}$/.test(info?.code || "")) return "不明";
+  const flag = [...info.code].map(c => String.fromCodePoint(127397 + c.charCodeAt(0))).join("");
+  return flag + " " + (countryNames?.of(info.code) || info.code) + " · " + info.code;
+}
+function direction(flow) {
+  const taco = ["10.2.0.2", "10.1.0.1"].includes(flow.dst);
+  return flow.scope === "MANAGEMENT" ? taco ? "LAN → TACO" : "LAN → AI" : flow.scope === "TACO" ? "TACO発信" : taco ? "AI → TACO" : "AI → 上流";
+}
+function navigate() {
+  const pages = {monitor:["セッション・死活監視", "接続中の通信と、主要ノードの状態。"], settings:["設定", "操作キーと、国別IPデータの設定。"], topology:["ネットワーク構成", "開発NWの接続とアドレスの参考情報。"]};
+  const page = Object.hasOwn(pages, location.hash.slice(1)) ? location.hash.slice(1) : "monitor";
+  for (const element of document.querySelectorAll("[data-page]")) element.hidden = element.dataset.page !== page;
+  for (const link of document.querySelectorAll("[data-nav]")) {
+    link.classList.toggle("active", link.dataset.nav === page);
+    if (link.dataset.nav === page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
+  }
+  $("page-title").textContent = pages[page][0]; $("page-description").textContent = pages[page][1];
+}
+function renderGeoip() {
+  const data = snapshot?.geoip;
+  $("geoip-status").textContent = data?.available ? "利用可能" : "未導入・利用不可";
+  $("geoip-status").className = "badge " + (data?.available ? "good" : "warn");
+  $("geoip-source").textContent = data?.source || "DB-IP Lite";
+  $("geoip-edition").textContent = data?.edition || "—";
+  $("geoip-updated").textContent = data?.updated_at ? new Date(data.updated_at).toLocaleString("ja-JP", {hour12:false}) : "—";
+  $("geoip-message").textContent = data?.error || (data?.available ? "ローカルのデータを使って国を表示しています。" : "国別IPデータを導入すると公開IPの国を表示できます。LAN内と予約アドレスはデータ未導入でも区別します。");
+}
 function endpoint(ip, port) { return ip + (port === null || port === undefined || port === "" ? "" : ":" + port); }
 function clock(value) { return value ? new Date(value).toLocaleTimeString("ja-JP", {hour12:false}) : "—"; }
 function bytes(value) {
@@ -20,10 +53,12 @@ function renderControl() {
   const known = control && control.available && !control.error;
   $("gate-state").textContent = known ? control.enabled ? "ON · 接続を許可" : "OFF · 遮断中" : "状態不明";
   $("gate-state").className = "gate-state " + (known ? control.enabled ? "online" : "offline" : "unknown");
-  const hasKey = controlDemo || $("control-token").value.trim().length > 0;
+  const hasKey = controlDemo || activeToken.length > 0;
   $("internet-on").disabled = !known || controlBusy || control.enabled || !hasKey;
   $("internet-off").disabled = controlBusy || !hasKey || (known && !control.enabled);
-  $("token-label").hidden = controlDemo;
+  $("key-link").hidden = hasKey;
+  $("key-status").textContent = controlDemo ? "デモ・キー不要" : activeToken ? "設定済み" : "未設定";
+  $("key-status").className = "badge " + (hasKey ? "good" : "warn");
   $("nodes").replaceChildren();
   for (const node of control?.nodes || []) {
     const row = document.createElement("div"); row.className = "node-row";
@@ -58,7 +93,7 @@ async function setInternet(enabled) {
   if (controlBusy) return;
   controlBusy = true; controlEpoch++; renderControl(); $("control-message").textContent = "通信状態を変更しています…";
   try {
-    const response = await fetch("/api/internet", {method:"POST", headers:{"Content-Type":"application/json", "Authorization":"Bearer " + $("control-token").value.trim()}, body:JSON.stringify({enabled}), signal:AbortSignal.timeout(10000)});
+    const response = await fetch("/api/internet", {method:"POST", headers:{"Content-Type":"application/json", "Authorization":"Bearer " + activeToken}, body:JSON.stringify({enabled}), signal:AbortSignal.timeout(10000)});
     const data = await response.json(); if (!response.ok) throw new Error(data.error || "変更失敗");
     control = data.control; controlDemo = data.demo;
     $("control-message").textContent = controlDemo ? "デモ表示を" + (enabled ? "ON" : "OFF") + "にしました。実機は変更していません。" : enabled ? "ONを確認しました。元のFirewallで許可した外向き通信が可能です。" : "OFFを確認しました。既存の外部通信も遮断しています。";
@@ -82,18 +117,23 @@ function render() {
   $("updated").textContent = "最終収集 " + clock(snapshot.updated_at);
   const notices = [...snapshot.errors];
   if (snapshot.stale) notices.unshift("収集データが古くなっています。collectorサービスを確認してください。");
-  if (snapshot.demo) notices.unshift("デモ表示です。通信先は例示用アドレスで、実機の通信ではありません。");
+  if (snapshot.demo) notices.unshift("デモ表示です。表示中の通信は実機の通信ではありません。");
   $("notice").hidden = !notices.length; $("notice").textContent = notices.join("\n");
+  renderGeoip();
   const search = $("search").value.toLowerCase(), scope = $("scope").value, proto = $("proto").value;
-  const rows = snapshot[tab].filter(f => (scope === "all" || f.scope === scope) && (proto === "all" || f.proto === proto) &&
-    [f.src, f.dst, f.sport, f.dport, f.proto, f.service, f.state, f.chain].join(" ").toLowerCase().includes(search));
+  const rows = snapshot[tab].filter(f => (scope === "all" || (scope === "related" ? ["AI", "MANAGEMENT"].includes(f.scope) : f.scope === scope)) && (proto === "all" || f.proto === proto) &&
+    [f.src, f.dst, f.sport, f.dport, f.proto, f.service, f.state, f.chain, direction(f), countryText(f.src_country), countryText(f.dst_country)].join(" ").toLowerCase().includes(search));
   $("row-count").textContent = rows.length + " 件";
   $("table-head").replaceChildren(); const header = document.createElement("tr");
   for (const title of heads[tab]) { const th = document.createElement("th"); th.textContent = title; header.append(th); } $("table-head").append(header);
   $("rows").replaceChildren();
   for (const f of rows) {
     const row = document.createElement("tr");
-    cell(row, endpoint(f.src, f.sport), "mono"); cell(row, endpoint(f.dst, f.dport), "mono");
+    cell(row, direction(f));
+    const srcCell = cell(row, endpoint(f.src, f.sport), "mono"), srcCountry = document.createElement("small");
+    srcCountry.className = "endpoint-country"; srcCountry.textContent = countryText(f.src_country); srcCell.append(srcCountry);
+    cell(row, endpoint(f.dst, f.dport), "mono");
+    cell(row, countryText(f.dst_country), "country");
     cell(row, tab === "drops" ? f.proto : f.service + " / " + f.proto);
     const status = tab === "drops" ? f.chain + " DROP" : tab === "history" ? f.ended_at ? "観測終了" : "追跡中" : f.state;
     const td = cell(row, ""), badge = document.createElement("span"); badge.textContent = status;
@@ -101,12 +141,12 @@ function render() {
     cell(row, tab === "drops" ? (f.in || "—") + " → " + (f.out || "—") : bytes(f.tx_bytes) + " / " + bytes(f.rx_bytes), "mono");
     cell(row, clock(tab === "drops" ? f.time : tab === "history" ? f.last_seen : f.first_seen), "mono"); $("rows").append(row);
   }
-  if (!rows.length) { const tr = document.createElement("tr"), td = cell(tr, "該当する通信はありません", "empty"); td.colSpan = 6; $("rows").append(tr); }
+  if (!rows.length) { const tr = document.createElement("tr"), td = cell(tr, "該当する通信はありません", "empty"); td.colSpan = 8; $("rows").append(tr); }
   $("table-note").textContent = tab === "drops"
     ? "直近5分・最大200件。既存FWのログに記録された拒否のみ表示します。レート制限やログのないルールによる拒否は含みません。"
     : tab === "history"
     ? "約5秒ごとの観測履歴から直近500件を表示。終了済みの保存は24時間・全体目安2万件。短い通信は見逃す場合があります。観測終了はTCP切断時刻ではありません。"
-    : "conntrackの追跡エントリです。許可・到達成功を保証する表示ではありません。送受信量は接続単位の累計で、取得できない場合は — を表示します。";
+    : "TACOを通る通信を両方向の開始元で表示。LAN → AIの管理SSHも含みます。送受信量は開始元を基準にした累計、国はIPからの概算です。";
 }
 async function refresh() {
   try {
@@ -128,7 +168,17 @@ $("export").addEventListener("click", () => {
   const a = document.createElement("a"); a.href = url; a.download = "taco-sessions-" + new Date().toISOString().replace(/[:.]/g,"-") + ".json"; a.click(); setTimeout(() => URL.revokeObjectURL(url),1000);
 });
 refresh();
-$("control-token").addEventListener("input", renderControl);
+$("key-form").addEventListener("submit", event => {
+  event.preventDefault();
+  const token = $("control-token").value.trim();
+  if (!token) { $("key-message").textContent = "操作キーを入力してください。"; return; }
+  activeToken = token; $("control-token").value = "";
+  $("key-message").textContent = "この画面に設定しました。メニュー移動後も使用できます。ページ再読み込みで消えます。";
+  renderControl();
+});
+$("clear-key").addEventListener("click", () => { activeToken = ""; $("control-token").value = ""; $("key-message").textContent = "操作キーを消去しました。"; renderControl(); });
 $("internet-on").addEventListener("click", () => setInternet(true));
 $("internet-off").addEventListener("click", () => setInternet(false));
+window.addEventListener("hashchange", navigate);
+navigate();
 refreshControl();

@@ -17,8 +17,10 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 from control import TOKEN, request_control
+from geoip import CountryLookup, DEFAULT_DATABASE
 
 AI = ipaddress.ip_network("10.1.0.0/24")
+LAN = ipaddress.ip_network("10.0.0.0/24")
 TACO_IPS = {"10.2.0.2", "10.1.0.1"}
 STATIC = Path(__file__).resolve().parent / "static"
 SERVICES = {("tcp", 443): "HTTPS", ("tcp", 80): "HTTP", ("tcp", 22): "SSH",
@@ -41,6 +43,18 @@ def scope(src):
     return None
 
 
+def flow_scope(src, dst):
+    outgoing = scope(src)
+    if outgoing:
+        return outgoing
+    try:
+        if ipaddress.ip_address(src) in LAN and (ipaddress.ip_address(dst) in AI or dst in TACO_IPS):
+            return "MANAGEMENT"
+    except ValueError:
+        pass
+    return None
+
+
 def parse_conntrack(text):
     """Keep the original tuple, never confuse it with the reply tuple."""
     result = []
@@ -56,7 +70,8 @@ def parse_conntrack(text):
             if key == "src" and "src" in original:
                 target = reply
             target.setdefault(key, value)
-        if not scope(original.get("src", "")) or "dst" not in original:
+        category = flow_scope(original.get("src", ""), original.get("dst", ""))
+        if not category:
             continue
         def number(mapping, key):
             value = mapping.get(key)
@@ -72,7 +87,7 @@ def parse_conntrack(text):
                     # conntrack id separates re-used tuples where supported.
                     re.findall(r"\bid=(\d+)", tail)[-1:] ]
         result.append({"key": hashlib.sha256(json.dumps(identity).encode()).hexdigest()[:24],
-                       "scope": scope(original["src"]), "proto": proto.upper(),
+                       "scope": category, "proto": proto.upper(),
                        "src": original["src"], "dst": original["dst"],
                        "sport": sport, "dport": dport, "state": state,
                        "service": SERVICES.get((proto, dport), proto.upper()),
@@ -89,11 +104,12 @@ def parse_journal(text):
             message = str(entry.get("MESSAGE", ""))
             match = re.search(r"taco-(input|forward|output)-drop", message)
             fields = dict(re.findall(r"\b([A-Z]+)=([^\s]*)", message))
-            if not match or not scope(fields.get("SRC", "")):
+            category = flow_scope(fields.get("SRC", ""), fields.get("DST", ""))
+            if not match or not category:
                 continue
             result.append({"time": dt.datetime.fromtimestamp(
                 int(entry["__REALTIME_TIMESTAMP"]) / 1e6, dt.timezone.utc).isoformat(),
-                "scope": scope(fields["SRC"]), "chain": match.group(1),
+                "scope": category, "chain": match.group(1),
                 "src": fields["SRC"], "dst": fields.get("DST", ""),
                 "proto": fields.get("PROTO", ""), "sport": fields.get("SPT", ""),
                 "dport": fields.get("DPT", ""), "in": fields.get("IN", ""),
@@ -178,9 +194,10 @@ def collect_once(db, state_path, interval):
 def demo_state():
     now = utc_now()
     raw = "\n".join([
-        "ipv4 2 tcp 6 431999 ESTABLISHED src=10.1.0.10 dst=203.0.113.20 sport=52318 dport=443 packets=45 bytes=8120 src=203.0.113.20 dst=10.1.0.10 sport=443 dport=52318 packets=120 bytes=450000 [ASSURED] mark=0 id=10",
+        "ipv4 2 tcp 6 431999 ESTABLISHED src=10.1.0.10 dst=1.1.1.1 sport=52318 dport=443 packets=45 bytes=8120 src=1.1.1.1 dst=10.1.0.10 sport=443 dport=52318 packets=120 bytes=450000 [ASSURED] mark=0 id=10",
         "ipv4 2 udp 17 28 src=10.1.0.10 dst=10.0.0.254 sport=45218 dport=53 packets=1 bytes=68 src=10.0.0.254 dst=10.1.0.10 sport=53 dport=45218 packets=1 bytes=150 mark=0 id=11",
-        "ipv4 2 tcp 6 431999 ESTABLISHED src=10.2.0.2 dst=198.51.100.40 sport=53712 dport=443 packets=40 bytes=9400 src=198.51.100.40 dst=10.2.0.2 sport=443 dport=53712 packets=350 bytes=1840000 [ASSURED] mark=0 id=12"])
+        "ipv4 2 tcp 6 431999 ESTABLISHED src=10.2.0.2 dst=8.8.8.8 sport=53712 dport=443 packets=40 bytes=9400 src=8.8.8.8 dst=10.2.0.2 sport=443 dport=53712 packets=350 bytes=1840000 [ASSURED] mark=0 id=12",
+        "ipv4 2 tcp 6 431999 ESTABLISHED src=10.0.0.9 dst=10.1.0.10 sport=50105 dport=22 packets=54 bytes=4200 src=10.1.0.10 dst=10.0.0.9 sport=22 dport=50105 packets=40 bytes=18200 [ASSURED] mark=0 id=13"])
     flows = parse_conntrack(raw)
     for flow in flows:
         flow.update(first_seen=now, last_seen=now)
@@ -191,8 +208,9 @@ def demo_state():
                        "in": "eth1", "out": "eth0"}]}
 
 
-def make_handler(state_path, port, demo=False, control_callback=None, token_file=TOKEN):
+def make_handler(state_path, port, demo=False, control_callback=None, token_file=TOKEN, geoip_path=DEFAULT_DATABASE):
     callback = control_callback or request_control
+    countries = CountryLookup(geoip_path)
     demo_control = {"enabled": False, "available": True, "checked_at": utc_now(),
                     "lease_seconds": 20, "error": None, "nodes": [
                         {"id": "openwrt", "name": "OpenWrt", "ip": "10.2.0.1", "state": "up", "latency_ms": 0.4, "checked_at": utc_now(), "last_success": utc_now()},
@@ -289,7 +307,7 @@ def make_handler(state_path, port, demo=False, control_callback=None, token_file
                 return
             elif path == "/api/state":
                 try:
-                    data = demo_state() if demo else json.loads(state_path.read_text())
+                    data = countries.enrich(demo_state() if demo else json.loads(state_path.read_text()))
                     age = (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(data["updated_at"])).total_seconds()
                     data["stale"] = age > max(20, data.get("interval", 5) * 3)
                     payload, mime = json.dumps(data, ensure_ascii=False).encode(), "application/json; charset=utf-8"
@@ -315,6 +333,7 @@ def main():
     parser.add_argument("--state-dir", type=Path, default=Path("/var/lib/taco-console"))
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--interval", type=int, default=5)
+    parser.add_argument("--geoip-db", type=Path, default=DEFAULT_DATABASE)
     args = parser.parse_args()
     if args.interval < 2 or not 1 <= args.port <= 65535:
         parser.error("interval >= 2 and valid TCP port required")
@@ -340,7 +359,7 @@ def main():
         finally:
             db.close()
     else:
-        server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(state_path, args.port, args.mode == "demo"))
+        server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(state_path, args.port, args.mode == "demo", geoip_path=args.geoip_db))
         print(f"TACO console: http://127.0.0.1:{args.port}" + (" [DEMO]" if args.mode == "demo" else ""), flush=True)
         try:
             server.serve_forever()

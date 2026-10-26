@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import gzip
 import json
 from pathlib import Path
 import sqlite3
@@ -24,6 +25,8 @@ def module(name, file):
 console = module("console", BASE / "taco-console/console.py")
 versions = module("versions", BASE / "check_versions.py")
 control = module("gate", BASE / "taco-console/control.py")
+geoip = module("countries", BASE / "taco-console/geoip.py")
+geoip_update = module("geoip_update", BASE / "update_geoip.py")
 
 
 class Connections(unittest.TestCase):
@@ -45,10 +48,19 @@ class Connections(unittest.TestCase):
             "tcp 6 10 ESTABLISHED src=10.0.0.9 dst=10.2.0.2 sport=50 dport=22 src=10.2.0.2 dst=10.0.0.9 sport=22 dport=50 id=4",
             "tcp 6 10 ESTABLISHED src=10.2.0.2 dst=1.1.1.1 sport=52 dport=443 src=1.1.1.1 dst=10.2.0.2 sport=443 dport=52 id=5"])
         flows = console.parse_conntrack(lines)
-        self.assertEqual(len(flows), 2)
+        self.assertEqual(len(flows), 3)
         self.assertEqual(flows[0]["state"], "UNREPLIED")
         self.assertIsNone(flows[0]["tx_bytes"])
-        self.assertEqual(flows[1]["scope"], "TACO")
+        self.assertEqual(flows[1]["scope"], "MANAGEMENT")
+        self.assertEqual(flows[2]["scope"], "TACO")
+
+    def test_management_to_spark_is_recorded_with_original_direction(self):
+        line = "ipv4 2 tcp 6 431999 ESTABLISHED src=10.0.0.9 dst=10.1.0.10 sport=50105 dport=22 packets=4 bytes=500 src=10.1.0.10 dst=10.0.0.9 sport=22 dport=50105 packets=6 bytes=1500 [ASSURED] mark=0 id=99"
+        flow, = console.parse_conntrack(line)
+        self.assertEqual(flow["scope"], "MANAGEMENT")
+        self.assertEqual((flow["src"], flow["dst"], flow["service"]), ("10.0.0.9", "10.1.0.10", "SSH"))
+        self.assertEqual((flow["tx_bytes"], flow["rx_bytes"]), (500, 1500))
+        self.assertIsNone(console.flow_scope("10.0.0.9", "1.1.1.1"))
 
     def test_icmp_identity(self):
         flow, = console.parse_conntrack("icmp 1 29 src=10.1.0.10 dst=10.1.0.1 type=8 code=0 id=20 src=10.1.0.1 dst=10.1.0.10 type=0 code=0 id=20 mark=0 id=100")
@@ -242,7 +254,11 @@ class HTTP(unittest.TestCase):
         head, body = response.split(b"\r\n\r\n", 1)
         self.assertIn(b"200 OK", head)
         self.assertIn(b"Content-Security-Policy:", head)
-        self.assertTrue(json.loads(body)["demo"])
+        data = json.loads(body)
+        self.assertTrue(data["demo"])
+        self.assertTrue(any(flow["scope"] == "MANAGEMENT" and flow["dst"] == "10.1.0.10" for flow in data["flows"]))
+        self.assertEqual(data["flows"][0]["src_country"]["kind"], "private")
+        self.assertIn("geoip", data)
 
     def test_reject_rebinding_cross_site_and_path_traversal(self):
         self.assertIn(b"403", self.request("/api/state", host="attacker.example"))
@@ -354,6 +370,58 @@ class Gate(unittest.TestCase):
                     control.install_persistent(config, snippet, Path(directory) / "token")
             self.assertEqual(config.read_text(), original)
             self.assertFalse(snippet.exists())
+
+
+class Countries(unittest.TestCase):
+    def build(self, directory, code="AU"):
+        source = Path(directory) / "country.csv.gz"
+        with gzip.open(source, "wt", encoding="utf-8") as output:
+            output.write(f"1.0.0.0,1.0.0.255,{code}\n8.8.8.0,8.8.8.255,US\n2001:4860::,2001:4860::ffff,US\n")
+        database = Path(directory) / "country.sqlite3"
+        self.assertEqual(geoip_update.build_database(source, database, "2026-10"), 2)
+        return database
+
+    def test_offline_lookup_private_special_unknown_and_range_boundaries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lookup = geoip.CountryLookup(self.build(directory))
+            self.assertEqual(lookup.lookup("1.0.0.0")["code"], "AU")
+            self.assertEqual(lookup.lookup("1.0.0.255")["code"], "AU")
+            self.assertEqual(lookup.lookup("1.0.1.0")["kind"], "unknown")
+            self.assertEqual(lookup.lookup("8.8.8.8")["code"], "US")
+            self.assertEqual(lookup.lookup("10.1.0.10")["kind"], "private")
+            self.assertEqual(lookup.lookup("203.0.113.10")["kind"], "special")
+            self.assertTrue(lookup.status()["available"])
+            self.assertEqual(lookup.status()["edition"], "2026-10")
+
+    def test_database_replacement_reloads_cached_countries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lookup = geoip.CountryLookup(self.build(directory))
+            self.assertEqual(lookup.lookup("1.0.0.1")["code"], "AU")
+            self.build(directory, "NZ")
+            self.assertEqual(lookup.lookup("1.0.0.1")["code"], "NZ")
+
+    def test_missing_or_corrupt_database_does_not_break_session_display(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "missing.sqlite3"
+            lookup = geoip.CountryLookup(file)
+            self.assertFalse(lookup.status()["available"])
+            self.assertEqual(lookup.lookup("8.8.8.8")["kind"], "unknown")
+            file.write_text("not a database")
+            state = lookup.enrich(console.demo_state())
+            self.assertTrue(state["flows"])
+            self.assertFalse(state["geoip"]["available"])
+            self.assertIn("読み込めません", state["geoip"]["error"])
+
+    def test_bad_download_import_preserves_existing_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = self.build(directory)
+            original = file.read_bytes()
+            source = Path(directory) / "invalid.csv.gz"
+            with gzip.open(source, "wt") as output:
+                output.write("8.8.8.255,8.8.8.0,US\n")
+            with self.assertRaises(ValueError):
+                geoip_update.build_database(source, file, "2026-11")
+            self.assertEqual(file.read_bytes(), original)
 
 
 if __name__ == "__main__":
