@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 from control import TOKEN, request_control
 from geoip import CountryLookup, DEFAULT_DATABASE
+from dns_observations import load_observations, domain_hints
 
 AI = ipaddress.ip_network("10.1.0.0/24")
 LAN = ipaddress.ip_network("10.0.0.0/24")
@@ -130,7 +131,7 @@ def command(args, empty_ok=False):
         return "", f"{args[0]}: {exc}"
 
 
-def update_history(db, flows, now, retention_hours=24, row_limit=20000):
+def update_history(db, flows, now, retention_hours=24, row_limit=20000, dns_records=None):
     """Poll observations, not a claim of complete connection-event capture."""
     db.execute("CREATE TABLE IF NOT EXISTS flows (key TEXT PRIMARY KEY, first_seen TEXT, "
                "last_seen TEXT, ended_at TEXT, data TEXT)")
@@ -140,9 +141,15 @@ def update_history(db, flows, now, retention_hours=24, row_limit=20000):
             db.execute("UPDATE flows SET ended_at=? WHERE key=?", (now, key))
     for flow in flows:
         # An observed gap starts a new observation interval for a reused key.
-        row = db.execute("SELECT first_seen, ended_at FROM flows WHERE key=?", (flow["key"],)).fetchone()
+        row = db.execute("SELECT first_seen, ended_at, data FROM flows WHERE key=?", (flow["key"],)).fetchone()
         first = row[0] if row and row[1] is None else now
         flow["first_seen"], flow["last_seen"] = first, now
+        # Keep evidence attached to the observation interval, even after DNS TTL expiry.
+        previous = json.loads(row[2]) if row and row[1] is None else {}
+        flow["domain_hints"] = previous.get("domain_hints", [])
+        if not flow["domain_hints"] and flow.get("scope") == "AI":
+            flow["domain_hints"] = domain_hints(dns_records or [], flow["src"], flow["dst"],
+                                                dt.datetime.fromisoformat(first).timestamp())
         db.execute("INSERT OR REPLACE INTO flows VALUES (?,?,?,NULL,?)",
                    (flow["key"], first, now, json.dumps(flow)))
     cutoff = (dt.datetime.fromisoformat(now) - dt.timedelta(hours=retention_hours)).isoformat(timespec="seconds")
@@ -179,7 +186,7 @@ def collect_once(db, state_path, interval):
         history = []
     else:
         flows = parse_conntrack(raw)
-        history = update_history(db, flows, now)
+        history = update_history(db, flows, now, dns_records=load_observations())
     journal, journal_error = command(["journalctl", "-k", "--since", "5 minutes ago",
                                      "-n", "1000", "--no-pager", "--quiet", "-o", "json",
                                      "--grep", "taco-(input|forward|output)-drop"], empty_ok=True)
@@ -195,12 +202,15 @@ def demo_state():
     now = utc_now()
     raw = "\n".join([
         "ipv4 2 tcp 6 431999 ESTABLISHED src=10.1.0.10 dst=1.1.1.1 sport=52318 dport=443 packets=45 bytes=8120 src=1.1.1.1 dst=10.1.0.10 sport=443 dport=52318 packets=120 bytes=450000 [ASSURED] mark=0 id=10",
-        "ipv4 2 udp 17 28 src=10.1.0.10 dst=10.0.0.254 sport=45218 dport=53 packets=1 bytes=68 src=10.0.0.254 dst=10.1.0.10 sport=53 dport=45218 packets=1 bytes=150 mark=0 id=11",
+        "ipv4 2 udp 17 28 src=10.1.0.10 dst=10.1.0.1 sport=45218 dport=53 packets=1 bytes=68 src=10.1.0.1 dst=10.1.0.10 sport=53 dport=45218 packets=1 bytes=150 mark=0 id=11",
         "ipv4 2 tcp 6 431999 ESTABLISHED src=10.2.0.2 dst=8.8.8.8 sport=53712 dport=443 packets=40 bytes=9400 src=8.8.8.8 dst=10.2.0.2 sport=443 dport=53712 packets=350 bytes=1840000 [ASSURED] mark=0 id=12",
         "ipv4 2 tcp 6 431999 ESTABLISHED src=10.0.0.9 dst=10.1.0.10 sport=50105 dport=22 packets=54 bytes=4200 src=10.1.0.10 dst=10.0.0.9 sport=22 dport=50105 packets=40 bytes=18200 [ASSURED] mark=0 id=13"])
     flows = parse_conntrack(raw)
     for flow in flows:
         flow.update(first_seen=now, last_seen=now)
+        flow["domain_hints"] = ([{"domain": "one.one.one.one", "observed_at": time.time(),
+                                  "expires_at": time.time()+300, "client": flow["src"], "address": flow["dst"]}]
+                                if flow["dst"] == "1.1.1.1" else [])
     return {"updated_at": now, "interval": 5, "demo": True, "collector_ok": True,
             "errors": [], "flows": flows, "history": [dict(f, ended_at=None) for f in flows],
             "drops": [{"time": now, "scope": "AI", "chain": "forward", "src": "10.1.0.10",

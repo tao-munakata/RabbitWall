@@ -1,5 +1,8 @@
 # DGX Spark ネットワーク管理資料
 
+> DNSフォワーダー導入後の差分：SparkのDNSはRadxa `10.1.0.1`、上流はNetScreen `10.0.0.254`。AIからの直接DNS転送は拒否し、Radxaで受けたDNSだけを転送する。対外接続「閉」ではDNS受付・転送・応答も遮断する。以下の基本構成のDNS関連記載は、導入後は [DNS構成・導入手順](../management/DNS.md) のポリシーへ読み替える。
+
+
 作成日：2026-10-25（日本時間）／管理機能追記：2026-10-26／版：1.1
 
 対象：OpenWrt（保存時ホスト名 R7800）、Raspberry Pi、DGX Spark、管理PC

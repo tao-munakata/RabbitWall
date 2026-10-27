@@ -48,7 +48,7 @@ for port in map(int,sys.argv[1].split(",")):
  server=socketserver.ThreadingTCPServer(("0.0.0.0",port),TCP)
  threading.Thread(target=server.serve_forever,daemon=True).start()
 if sys.argv[2]!="none":
- server=socketserver.ThreadingUDPServer(("10.0.0.254",int(sys.argv[2])),UDP)
+ server=socketserver.ThreadingUDPServer((sys.argv[3],int(sys.argv[2])),UDP)
  threading.Thread(target=server.serve_forever,daemon=True).start()
 print("ready",flush=True)
 threading.Event().wait()
@@ -80,9 +80,9 @@ def main():
     control.nft(["-f", str(ROOT / "output/rpi/nftables.conf")])
     controller = control.Controller()
     try:
-        for namespace, ports, udp in [("upstream", "443,53", "53"), ("ai", "22", "none"), (None, "22", "none")]:
+        for namespace, ports, udp in [("upstream", "443,53", "53"), ("ai", "22", "none"), (None, "22,53", "53")]:
             prefix = ["ip", "netns", "exec", namespace] if namespace else []
-            child = subprocess.Popen(prefix + [sys.executable, "-u", "-c", SERVER, ports, udp], stdout=subprocess.PIPE, text=True)
+            child = subprocess.Popen(prefix + [sys.executable, "-u", "-c", SERVER, ports, udp, "10.0.0.254" if namespace == "upstream" else "10.1.0.1"], stdout=subprocess.PIPE, text=True)
             children.append(child)
             assert child.stdout.readline().strip() == "ready"
         assert not controller.status()["enabled"]
@@ -93,13 +93,22 @@ def main():
         client(None, "1.1.1.1", 443)  # TACO updates stay available while AI is OFF.
         nodes = control.probe_nodes()
         assert all(node["state"] == "up" for node in nodes), nodes
+        client("ai", "10.1.0.1", 53, expected=False)
+        client("ai", "10.1.0.1", 53, expected=False, udp=True)
+        client(None, "10.0.0.254", 53, source="10.1.0.1", expected=False)
+        client(None, "10.0.0.254", 53, source="10.1.0.1", expected=False, udp=True)
+        client(None, "10.0.0.254", 53)  # Radxa OS DNS still works.
         print("PASS: boot OFF, DNS blocked, management SSH and health preserved, TACO online", flush=True)
         controller.set_enabled(True)
         client("ai", "1.1.1.1", 443)
-        client("ai", "10.0.0.254", 53)
-        client("ai", "10.0.0.254", 53, udp=True)
+        client("ai", "10.0.0.254", 53, expected=False)
+        client("ai", "10.0.0.254", 53, udp=True, expected=False)
+        client("ai", "10.1.0.1", 53)
+        client("ai", "10.1.0.1", 53, udp=True)
+        client(None, "10.0.0.254", 53, source="10.1.0.1")
+        client(None, "10.0.0.254", 53, source="10.1.0.1", udp=True)
         client("ai", "10.0.0.9", 443, expected=False)  # ON never widens existing LAN restrictions.
-        print("PASS: ON permits existing HTTPS/DNS policy and still blocks LAN", flush=True)
+        print("PASS: ON permits local DNS and relay upstream, direct DNS bypass blocked", flush=True)
         held_code = '''import socket,sys
 s=socket.create_connection(("1.1.1.1",443),timeout=0.7)
 print("ready",flush=True)
@@ -132,11 +141,36 @@ except OSError: print("blocked",flush=True)
         controller.set_enabled(False)
         push.stdin.write("receive\n"); push.stdin.flush()
         assert push.stdout.readline().strip() == "blocked"
-        print("PASS: OFF blocks established TCP in both directions, SSH remains", flush=True)
+        controller.set_enabled(True)
+        dns_held = subprocess.Popen(["ip", "netns", "exec", "ai", sys.executable, "-u", "-c",
+                                     held_code.replace('("1.1.1.1",443)', '("10.1.0.1",53)')],
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        children.append(dns_held)
+        assert dns_held.stdout.readline().strip() == "ready"
+        dns_held.stdin.write("send\n"); dns_held.stdin.flush()
+        assert dns_held.stdout.readline().strip() == "ok"
+        controller.set_enabled(False)
+        dns_held.stdin.write("send\n"); dns_held.stdin.flush()
+        assert dns_held.stdout.readline().strip() == "blocked"
+        client("ai", "10.1.0.1", 53, expected=False, udp=True)
+        client(None, "10.0.0.254", 53, source="10.1.0.1", expected=False)
+        # A DNS response already scheduled by the server must not escape OFF.
+        controller.set_enabled(True)
+        dns_push = subprocess.Popen(["ip", "netns", "exec", "ai", sys.executable, "-u", "-c",
+                                     push_code.replace('("1.1.1.1",443)', '("10.1.0.1",53)')],
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        children.append(dns_push)
+        assert dns_push.stdout.readline().strip() == "ready"
+        controller.set_enabled(False)
+        dns_push.stdin.write("receive\n"); dns_push.stdin.flush()
+        assert dns_push.stdout.readline().strip() == "blocked"
+        print("PASS: OFF blocks established TCP/local DNS, relay upstream and in-flight DNS replies", flush=True)
         controller.set_enabled(True)
         control.nft(["-f", "-"], "flush set inet taco_console online_sources\nadd element inet taco_console online_sources { 10.1.0.0/24 timeout 1s }\n")
         time.sleep(1.3)
         assert not controller.status()["enabled"]
+        client("ai", "10.1.0.1", 53, expected=False)
+        client("ai", "10.1.0.1", 53, expected=False, udp=True)
         controller.tick()
         assert not controller.desired
         client("ai", "1.1.1.1", 443, expected=False)

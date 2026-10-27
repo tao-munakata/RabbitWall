@@ -1,7 +1,7 @@
 (function (root) {
   "use strict";
   const COLORS = {HTTPS:"#54e0bd", HTTP:"#54e0bd", DNS:"#a89cef", SSH:"#ffa42a", OTHER:"#7fa4d8", DROP:"#ff483e"};
-  const LOCAL_NAMES = {"10.1.0.10":"Sun SPARC", "10.1.0.1":"Radxa / AI", "10.2.0.2":"Radxa", "10.0.0.9":"管理PC", "10.0.0.254":"Netgear / DNS", "10.2.0.1":"Netgear"};
+  const LOCAL_NAMES = {"10.1.0.10":"Sun SPARC", "10.1.0.1":"Radxa / AI", "10.2.0.2":"Radxa", "10.0.0.9":"管理PC", "10.0.0.254":"NetScreen / DNS", "10.2.0.1":"NetScreen"};
   function endpointNode(ip, country, countries) {
     if (country?.kind === "private" || /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip)) {
       return {key:"local:" + ip, kind:"local", ip, label:LOCAL_NAMES[ip] || ip};
@@ -143,6 +143,8 @@
         const line = document.createElement("strong"), sub = document.createElement("small");
         line.textContent = route.src.label + " → " + route.dst.label;
         sub.textContent = `${route.service} · ${route.count} セッション`;
+        const names = [...new Set(route.flows.flatMap(f => (f.domain_hints || []).map(h => h.domain)))];
+        if (names.length) sub.textContent += " · 推定: " + names.slice(0, 2).join(" / ");
         button.append(line, sub); button.addEventListener("click", () => this.select(route.key)); this.list.append(button);
         if (route.key === focused) button.focus({preventScroll:true});
       }
@@ -160,6 +162,11 @@
         const line=document.createElement("code");
         line.textContent=`${flow.src}${flow.sport ? ":"+flow.sport : ""} → ${flow.dst}${flow.dport ? ":"+flow.dport : ""} · ${flow.state || flow.proto}`;
         this.detail.append(line);
+        if (flow.domain_hints?.length) {
+          const hint = document.createElement("small");
+          hint.textContent = "推定ドメイン: " + flow.domain_hints.map(h => h.domain).join(" / ");
+          this.detail.append(hint);
+        }
       }
       if (route.count > 8) { const remaining=document.createElement("small"); remaining.textContent=`ほか ${route.count-8} セッション`; this.detail.append(remaining); }
       const button=document.createElement("button"); button.className="export"; button.textContent="このIPを表で確認";
@@ -184,7 +191,7 @@
       this.inset=pacificInset(this.width,this.height);
       this.inset.x+=this.offset.x;this.inset.y+=this.offset.y;
       const known=[{label:"管理PC",glyph:"管",ip:"10.0.0.9",ips:["10.0.0.9"]},
-        {label:"Netgear",glyph:"路",ip:"10.0.0.254",secondaryIP:"10.2.0.1",ips:["10.0.0.254","10.2.0.1"]},
+        {label:"NetScreen",glyph:"路",ip:"10.0.0.254",secondaryIP:"10.2.0.1",ips:["10.0.0.254","10.2.0.1"]},
         {label:"Radxa",glyph:"継",ip:"10.2.0.2",secondaryIP:"10.1.0.1",ips:["10.2.0.2","10.1.0.1"]},
         {label:"Sun SPARC",glyph:"機",ip:"10.1.0.10",ips:["10.1.0.10"]}];
       const extras=this.model.nodes.filter(node=>node.kind==="local" && !known.some(host=>host.ips.includes(node.ip)));
@@ -237,7 +244,7 @@
       }
       ctx.fillStyle=this.color("#07110fef");ctx.fillRect(box.x,box.y,box.width,box.height);ctx.strokeStyle=this.color("#e58b2e");ctx.strokeRect(box.x,box.y,box.width,box.height);
       ctx.fillStyle=this.color("#ed9630");ctx.fillRect(box.x,box.y,box.width,26);ctx.fillStyle=this.color("#11100b");ctx.font="bold 11px -apple-system,sans-serif";ctx.fillText("国内LAN / 日本拠点",box.x+12,box.y+17);
-      ctx.fillStyle=this.color("#92a593");ctx.font="8px ui-monospace,monospace";ctx.fillText("PACIFIC INSET · SCHEMATIC",box.x+12,box.y+box.height-9);
+      ctx.fillStyle=this.color("#92a593");ctx.font="10px ui-monospace,monospace";ctx.fillText("PACIFIC INSET · SCHEMATIC",box.x+12,box.y+box.height-9);
     }
     draw(now) {
       if (!this.width || !this.active) return;
@@ -266,12 +273,12 @@
         const labelX=Math.max(65+this.offset.x,Math.min(this.width-65+this.offset.x,x));
         if(node.kind==="local"){
           ctx.strokeStyle=ctx.fillStyle;ctx.lineWidth=1;ctx.strokeRect(x-9,y-9,18,18);ctx.font="bold 12px -apple-system,sans-serif";ctx.textAlign="center";ctx.fillText(node.glyph,x,y+4);
-          ctx.font="10px -apple-system,sans-serif";ctx.fillText(node.label,labelX,y-15);
-          ctx.font="8px ui-monospace,monospace";ctx.fillStyle=this.color("#8eac93");ctx.fillText(node.ip || "",labelX,y+21);
+          ctx.font="12px -apple-system,sans-serif";ctx.fillText(node.label,labelX,y-15);
+          ctx.font="10px ui-monospace,monospace";ctx.fillStyle=this.color("#8eac93");ctx.fillText(node.ip || "",labelX,y+21);
           if(node.secondaryIP)ctx.fillText(node.secondaryIP,labelX,y+31);
         }else{
           ctx.shadowColor=ctx.fillStyle;ctx.shadowBlur=8;ctx.beginPath();ctx.arc(x,y,3.4,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
-          ctx.strokeStyle=this.color("#53967a99");ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.stroke();ctx.font="10px -apple-system,sans-serif";ctx.textAlign="center";ctx.fillStyle=this.color("#bddfcb");ctx.fillText(node.label,labelX,y-13);
+          ctx.strokeStyle=this.color("#53967a99");ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.stroke();ctx.font="12px -apple-system,sans-serif";ctx.textAlign="center";ctx.fillStyle=this.color("#bddfcb");ctx.fillText(node.label,labelX,y-13);
         }
       }
       ctx.textAlign="left";

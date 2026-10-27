@@ -99,7 +99,7 @@ function renderControl() {
   for (const node of control?.nodes || []) {
     const row = document.createElement("div"); row.className = "node-row";
     const identity = document.createElement("div"), title = document.createElement("strong"), ip = document.createElement("code");
-    title.textContent = ({openwrt:"Netgear",taco:"Radxa",spark:"Sun SPARC",dgx:"Sun SPARC"})[node.id] || ({OpenWrt:"Netgear",TACO:"Radxa","DGX Spark":"Sun SPARC"})[node.name] || node.name; ip.textContent = node.ip; identity.append(title, ip);
+    title.textContent = ({openwrt:"NetScreen",taco:"Radxa",spark:"Sun SPARC",dgx:"Sun SPARC"})[node.id] || ({OpenWrt:"NetScreen",TACO:"Radxa","DGX Spark":"Sun SPARC"})[node.name] || node.name; ip.textContent = node.ip; identity.append(title, ip);
     const status = document.createElement("span"), last = document.createElement("small");
     status.className = "node-state " + (node.state === "up" ? "good" : "warn");
     status.textContent = node.state === "up" ? "正" : node.state === "no_reply" ? "断" : "不";
@@ -159,7 +159,7 @@ function render() {
   renderGeoip();
   const search = $("search").value.toLowerCase(), scope = $("scope").value, proto = $("proto").value;
   const matches = f => (scope === "all" || (scope === "related" ? ["AI", "MANAGEMENT"].includes(f.scope) : f.scope === scope)) && (proto === "all" || f.proto === proto) &&
-    [f.src, f.dst, f.sport, f.dport, f.proto, f.service, f.state, f.chain, direction(f), countryText(f.src_country), countryText(f.dst_country)].join(" ").toLowerCase().includes(search);
+    [...(f.domain_hints || []).map(h => h.domain), f.src, f.dst, f.sport, f.dport, f.proto, f.service, f.state, f.chain, direction(f), countryText(f.src_country), countryText(f.dst_country)].join(" ").toLowerCase().includes(search);
   const rows = snapshot[tab].filter(matches);
   $("row-count").textContent = rows.length + " 件";
   atlas.update(rows, {kind:tab, stale:snapshot.stale || !snapshot.collector_ok});
@@ -171,7 +171,13 @@ function render() {
     cell(row, direction(f));
     const srcCell = cell(row, endpoint(f.src, f.sport), "mono"), srcCountry = document.createElement("small");
     srcCountry.className = "endpoint-country"; srcCountry.textContent = countryText(f.src_country); srcCell.append(srcCountry);
-    cell(row, endpoint(f.dst, f.dport), "mono");
+    const dstCell = cell(row, endpoint(f.dst, f.dport), "mono");
+    if (f.domain_hints?.length) {
+      const hints = document.createElement("small"); hints.className = "endpoint-country";
+      hints.textContent = "推定ドメイン: " + f.domain_hints.map(h => h.domain).join(" / ");
+      hints.title = "同じ端末のDNS応答と宛先IPを照合した候補です。HTTPの接続先名を保証しません。";
+      dstCell.append(hints);
+    }
     cell(row, countryText(f.dst_country), "country");
     cell(row, tab === "drops" ? f.proto : f.service + " / " + f.proto);
     const status = tab === "drops" ? f.chain + " DROP" : tab === "history" ? f.ended_at ? "観測終了" : "追跡中" : f.state;

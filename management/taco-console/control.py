@@ -26,6 +26,11 @@ PROBE_COMMENT = "taco-console-spark-probe"
 PROBE_RULE = ('insert rule inet taco_filter output oifname "eth1" '
               'ip saddr 10.1.0.1 ip daddr 10.1.0.10 icmp type echo-request '
               f'counter accept comment "{PROBE_COMMENT}"\n')
+DNS_COMMENT = "taco-console-local-dns"
+DNS_RULE = ('insert rule inet taco_filter input iifname "eth1" '
+            'ip saddr 10.1.0.0/24 ip daddr 10.1.0.1 '
+            'meta l4proto { tcp, udp } th dport 53 counter accept '
+            f'comment "{DNS_COMMENT}"\n')
 # This chain only imposes extra drops. ON returns to the original firewall;
 # it never replaces or bypasses its allow list. Empty/expired set means OFF.
 GATE_RULES = '''table inet taco_console {
@@ -39,8 +44,26 @@ GATE_RULES = '''table inet taco_console {
         limit rate 5/second burst 10 packets log prefix "taco-forward-drop gate "
         counter drop
     }
+    chain dns_request {
+        ip saddr @online_sources counter return
+        counter drop
+    }
+    chain dns_reply {
+        ip daddr @online_sources counter return
+        counter drop
+    }
+    chain input {
+        type filter hook input priority -10; policy accept;
+        iifname "eth1" ip daddr 10.1.0.1 meta l4proto { tcp, udp } th dport 53 jump dns_request
+    }
+    chain output {
+        type filter hook output priority -10; policy accept;
+        ip saddr 10.1.0.1 ip daddr 10.0.0.254 meta l4proto { tcp, udp } th dport 53 jump dns_request
+        oifname "eth1" ip saddr 10.1.0.1 meta l4proto { tcp, udp } th sport 53 jump dns_reply
+    }
     chain forward {
         type filter hook forward priority -10; policy accept;
+        iifname "eth1" meta l4proto { tcp, udp } th dport 53 counter drop
         iifname "eth1" oifname "eth0" meta nfproto ipv6 counter drop
         iifname "eth0" oifname "eth1" meta nfproto ipv6 counter drop
         iifname "eth1" oifname "eth0" ip saddr 10.1.0.0/24 ct direction original jump ai_egress
@@ -92,7 +115,10 @@ def read_gate():
     chains = {item["chain"]["name"]: item["chain"] for item in objects if "chain" in item}
     if (enabled.get("type") != "ipv4_addr" or "timeout" not in enabled.get("flags", [])
             or "ai_egress" not in chains or chains.get("forward", {}).get("hook") != "forward"
-            or chains["forward"].get("prio") != -10):
+            or chains["forward"].get("prio") != -10
+            or any(chains.get(name, {}).get("hook") != name
+                   or chains.get(name, {}).get("prio") != -10 for name in ("input", "output"))
+            or not {"dns_request", "dns_reply"}.issubset(chains)):
         raise RuntimeError("gate structure differs; reinstall required")
     return {"handle": table["handle"], "enabled": bool(enabled.get("elem"))}
 
@@ -117,6 +143,8 @@ def install_runtime():
     script = ("delete table inet taco_console\n" if exists else "") + GATE_RULES
     if not probe_exists:
         script += PROBE_RULE
+    if not any(item.get("rule", {}).get("comment") == DNS_COMMENT for item in objects):
+        script += DNS_RULE
     # Delete+create is one atomic nft transaction; no open interval in between.
     nft(["-f", "-"], script)
     return read_gate()["handle"]
@@ -279,7 +307,7 @@ def install_persistent(config=Path("/etc/nftables.conf"), snippet=Path("/etc/nft
     candidate = original if include in original else original.rstrip() + "\n\n# TACO console: boot defaults to OFF\n" + include + "\n"
     snippet.parent.mkdir(parents=True, exist_ok=True)
     old_snippet = snippet.read_bytes() if snippet.exists() else None
-    snippet.write_text(GATE_RULES + "\n" + PROBE_RULE)
+    snippet.write_text(GATE_RULES + "\n" + PROBE_RULE + DNS_RULE)
     os.chmod(snippet, 0o644)
     fd, temporary = tempfile.mkstemp(prefix=".taco-nft-check-", dir=config.parent)
     try:

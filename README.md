@@ -6,6 +6,8 @@
 実機の値に合わせて生成し直すこと。Raspberry Pi OS Lite 64bit + NetworkManager、OpenWrt fw4を対象とする。
 OpenWrtは既存設定への追加断片であり、設定ファイル全体の置換用ではない。
 
+DNS転送・推定ドメイン表示を追加する場合は [Radxa DNS導入・Spark設定手順](management/DNS.md) を参照。導入後はSparkのDNSを `10.1.0.1` に変更する。以下はDNS転送追加前の基本ネットワーク構成。
+
 ## 構成
 
 ```text
