@@ -19,3 +19,10 @@ control.token
 .env
 .env.*
 !.env.example
+
+# mTLS private material (normally generated under ignored output/)
+*.key
+*.p12
+*.pfx
+*.csr
+key.pem

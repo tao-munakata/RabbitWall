@@ -1,8 +1,7 @@
 "use strict";
 let snapshot = null, tab = "flows";
 let control = null, controlBusy = false, controlDemo = false, controlEpoch = 0;
-let activeToken = "", tokenSaved = false;
-const tokenPreference = new window.TokenPreference();
+let controlAuthorized = false;
 const $ = id => document.getElementById(id);
 let sessionView = "map";
 const atlas = new window.SessionAtlas({canvas:$("atlas-canvas"), list:$("atlas-routes"),
@@ -88,16 +87,14 @@ function renderControl() {
   $("gate-state").textContent = known ? control.enabled ? "開" : "閉" : "不明";
   $("gate-caption").textContent = known ? control.enabled ? "インターネット接続を許可中" : "インターネット接続を遮断中" : "現在の接続状態を確認できません";
   $("gate-state").className = "gate-state " + state;
-  const hasKey = controlDemo || activeToken.length > 0;
-  $("internet-toggle").disabled=controlBusy || !hasKey;
+  $("internet-toggle").disabled=controlBusy || !controlAuthorized;
   $("internet-toggle").setAttribute("aria-checked",String(Boolean(known && control.enabled)));
   $("internet-toggle").setAttribute("aria-label",known ? "AIセグメントの対外接続" : "AIセグメントの対外接続・状態不明（操作すると閉じます）");
-  $("internet-toggle").title=controlBusy ? "変更中…" : known ? control.enabled ? "接続を閉じる" : "接続を開く" : "接続を閉じる（現在の状態は不明）";
-  $("key-link").hidden = hasKey;
-  $("key-status").textContent = controlDemo ? "試" : activeToken ? "済" : "未";
-  $("key-status").title=controlDemo ? "試験表示・キー不要" : activeToken ? tokenSaved ? "ブラウザーに保存済み" : "この画面に設定済み" : "操作キー未設定";
-  $("key-status").setAttribute("aria-label",$("key-status").title);
-  $("key-status").className = "badge " + (hasKey ? "good" : "warn");
+  $("internet-toggle").title=controlBusy ? "変更中…" : !controlAuthorized ? "証明書付きHTTPSで接続してください" : known ? control.enabled ? "接続を閉じる" : "接続を開く" : "接続を閉じる（現在の状態は不明）";
+  $("auth-link").hidden=controlAuthorized;
+  $("auth-status").textContent=controlDemo ? "試" : controlAuthorized ? "証" : "未";
+  $("auth-status").className="badge " + (controlAuthorized ? "good" : "warn");
+  $("auth-message").textContent=controlDemo ? "試験表示・実機操作なし" : controlAuthorized ? "クライアント証明書で認証済みです。開閉操作を利用できます。" : "証明書付きHTTPSで接続すると開閉操作を利用できます。";
   $("nodes").replaceChildren();
   for (const node of control?.nodes || []) {
     const row = document.createElement("div"); row.className = "node-row";
@@ -122,11 +119,11 @@ async function refreshControl() {
     const response = await fetch("/api/control", {cache:"no-store", signal:AbortSignal.timeout(8000)});
     const data = await response.json(); if (!response.ok) throw new Error(data.error || "状態取得失敗");
     if (epoch !== controlEpoch || controlBusy) return;
-    control = data.control; controlDemo = data.demo; renderControl();
+    control = data.control; controlDemo = data.demo; controlAuthorized=Boolean(data.auth?.can_control); renderControl();
     $("control-message").textContent = controlDemo ? "試験表示・実機操作なし" : control.error || "管理SSH・Radxa自身の通信は維持";
   } catch (e) {
     if (epoch !== controlEpoch || controlBusy) return;
-    control = {available:false, nodes:control?.nodes || [], error:e.message}; renderControl();
+    controlAuthorized=false; control = {available:false, nodes:control?.nodes || [], error:e.message}; renderControl();
     $("control-message").textContent = "通信状態を確認できません。" + e.message;
   } finally { setTimeout(refreshControl, 5000); }
 }
@@ -134,7 +131,7 @@ async function setInternet(enabled) {
   if (controlBusy) return;
   controlBusy = true; controlEpoch++; renderControl(); $("control-message").textContent = "通信状態を変更しています…";
   try {
-    const response = await fetch("/api/internet", {method:"POST", headers:{"Content-Type":"application/json", "Authorization":"Bearer " + activeToken}, body:JSON.stringify({enabled}), signal:AbortSignal.timeout(10000)});
+    const response = await fetch("/api/internet", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({enabled}), signal:AbortSignal.timeout(10000)});
     const data = await response.json(); if (!response.ok) throw new Error(data.error || "変更失敗");
     control = data.control; controlDemo = data.demo;
     $("control-message").textContent = controlDemo ? "試験 / " + (enabled ? "開" : "閉") : enabled ? "対外接続を許可しました" : "既存の外部通信も遮断しました";
@@ -210,35 +207,8 @@ $("export").addEventListener("click", () => {
   const a = document.createElement("a"); a.href = url; a.download = "taco-sessions-" + new Date().toISOString().replace(/[:.]/g,"-") + ".json"; a.click(); setTimeout(() => URL.revokeObjectURL(url),1000);
 });
 refresh();
-function saveTokenPreference(remember) {
-  const result=tokenPreference.save(activeToken,remember);
-  tokenSaved=result.saved;
-  $("key-message").textContent=result.error
-    ? "キーはこの画面で使用できますが、ブラウザーの保存・削除に失敗しました。ブラウザーのサイトデータ設定を確認してください。"
-    : result.saved ? "このブラウザーに保存しました。次回は自動で読み込みます。"
-    : "キーはこの画面だけで使用します。保存済みのキーは削除しました。";
-  renderControl();
-  return result;
-}
-const restoredToken=tokenPreference.read();
-activeToken=restoredToken.token;tokenSaved=Boolean(activeToken);
-$("remember-token").checked=tokenSaved;
-if(tokenSaved)$("key-message").textContent="保存済みの操作キーを読み込みました。";
-$("key-form").addEventListener("submit", event => {
-  event.preventDefault();
-  const token = $("control-token").value.trim() || activeToken;
-  if (!token) { $("key-message").textContent = "操作キーを入力してください。"; return; }
-  activeToken = token; $("control-token").value = "";
-  saveTokenPreference($("remember-token").checked);
-});
-$("remember-token").addEventListener("change",()=>{
-  if(!$("remember-token").checked)saveTokenPreference(false);
-});
-$("clear-key").addEventListener("click", () => {
-  activeToken="";$("control-token").value="";$("remember-token").checked=false;
-  const result=saveTokenPreference(false);
-  if(!result.error)$("key-message").textContent="操作キーを消去しました。";
-});
+// Remove any old token stored at this origin; certificates now authenticate the browser.
+try { localStorage.removeItem("taco-operation-token"); } catch (_) {}
 $("internet-toggle").addEventListener("click", () => setInternet(Boolean(control?.available && !control.error && !control.enabled)));
 $("view-map").addEventListener("click", () => setSessionView("map"));
 $("view-table").addEventListener("click", () => setSessionView("table"));

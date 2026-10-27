@@ -269,9 +269,6 @@ class HTTP(unittest.TestCase):
         script = self.request("/atlas.js")
         self.assertIn(b"200 OK", script.split(b"\r\n\r\n",1)[0])
         self.assertIn(b"text/javascript", script)
-        preference = self.request("/preferences.js")
-        self.assertIn(b"200 OK", preference.split(b"\r\n\r\n", 1)[0])
-        self.assertIn(b"text/javascript", preference)
         response = self.request("/world.json")
         head, body = response.split(b"\r\n\r\n",1)
         self.assertIn(b"application/json",head)
@@ -306,6 +303,20 @@ class HTTP(unittest.TestCase):
             response = self.request("/api/internet", method="POST", headers=headers, body=body, handler=handler)
             self.assertIn(b"200 OK", response)
             callback.assert_called_once_with("enable")
+
+    def test_proxy_auth_metadata_needs_server_only_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            token = Path(directory) / "token"
+            token.write_text("x" * 43)
+            handler = console.make_handler(Path(directory) / "state", 8765,
+                        control_callback=lambda _: {"enabled": False, "available": True}, token_file=token)
+            for headers, permitted in [("", False), ("X-Taco-Auth: mtls\r\n", False),
+                    ("X-Taco-Auth: mtls\r\nAuthorization: Bearer wrong\r\n", False),
+                    ("X-Taco-Auth: mtls\r\nAuthorization: Bearer " + "x" * 43 + "\r\n", True)]:
+                response = self.request("/api/control", headers=headers, handler=handler)
+                body = response.split(b"\r\n\r\n", 1)[1]
+                self.assertEqual(json.loads(body)["auth"]["can_control"], permitted)
+                self.assertNotIn(b"x" * 43, body)
 
     def test_mutation_rejects_unexpected_fields_and_non_boolean(self):
         callback = unittest.mock.Mock()

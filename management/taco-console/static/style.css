@@ -60,7 +60,7 @@ nav{margin-top:10px}header{min-height:50px}.panel-head{flex-wrap:wrap;gap:12px}#
 .node-row strong{font-size:15px;font-weight:600;margin-bottom:7px}.node-row code{font-size:12px;line-height:1.6;overflow-wrap:anywhere}.node-row small{font-size:10px;line-height:1.5;margin-top:7px}
 .node-panel>.section-title{padding:13px 16px 0}.node-panel .section-title h2{font-size:12px}.node-panel .section-title>small{font-size:9px}
 .gate-panel{grid-template-columns:1fr}.gate-panel>.section-title{padding-top:13px}.gate-panel .section-title h2{font-size:10px}.gate-panel .section-title>small{display:none}
-.gate-current{padding:12px;gap:14px;min-height:83px}.gate-panel #key-link{grid-column:1/-1;padding:0 12px 6px;font-size:10px}
+.gate-current{padding:12px;gap:14px;min-height:83px}.gate-panel #auth-link{grid-column:1/-1;padding:0 12px 6px;font-size:10px}
 .gate-panel .gate-indicator{width:60px;min-width:60px;flex-basis:60px;height:34px;padding:0;border-radius:24px;transition:background .15s,border-color .15s;touch-action:manipulation}
 .gate-panel .gate-indicator::after{left:4px;top:4px;width:24px;height:24px;transition:left .15s}
 .gate-panel[data-state="online"] .gate-indicator::after{left:30px}.gate-panel[data-state="unknown"] .gate-indicator::after{left:17px}
@@ -91,3 +91,5 @@ nav{margin-top:10px}header{min-height:50px}.panel-head{flex-wrap:wrap;gap:12px}#
   .workspace-mode .metrics article{padding:10px 14px}
   .workspace-mode .metrics strong{font-size:27px;margin-top:6px}
 }
+
+#auth-status{font:900 24px "Yu Mincho",serif}

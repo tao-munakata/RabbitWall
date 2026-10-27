@@ -1,6 +1,6 @@
 # DGX Spark 用ネットワーク設定
 
-通信状況のWeb表示と、OpenWrt／TACOのバージョン収集は [開発NW管理ツール](management/README.md) を参照。
+通信状況のWeb表示と、OpenWrt／TACOのバージョン収集は [開発NW管理ツール](management/README.md) を参照。管理PC限定のHTTPS・mTLS接続と証明書登録は [mTLS導入手順](management/MTLS.md) を参照。
 
 デプロイは行わない。`example-output/` は **管理PC=10.0.0.10、OpenWrtポート=lan4、RPi上流=eth0、AI側=eth1を仮定したサンプル**。
 実機の値に合わせて生成し直すこと。Raspberry Pi OS Lite 64bit + NetworkManager、OpenWrt fw4を対象とする。

@@ -30,7 +30,7 @@ if [ "$mode" != '--update-console' ]; then
 fi
 install -m 0644 "$base/taco-console/geoip.py" /opt/taco-console/geoip.py
 install -m 0644 "$base/update_geoip.py" /opt/taco-console/update_geoip.py
-for asset in index.html app.js preferences.js atlas.js world.json style.css; do
+for asset in index.html app.js atlas.js world.json style.css; do
     install -m 0644 "$base/taco-console/static/$asset" "/opt/taco-console/static/$asset"
 done
 if [ "$mode" = '--update-console' ]; then
@@ -46,5 +46,5 @@ systemctl daemon-reload
 systemctl enable taco-console-collector.service taco-console-control.service taco-console-web.service
 systemctl restart taco-console-control.service
 systemctl restart taco-console-collector.service taco-console-web.service
-echo '導入完了。AI側の外向き通信はOFFです。SSHトンネルで http://127.0.0.1:8765 を開いてください。'
-echo '操作キーは sudo cat /etc/taco-console/control.token で確認できます。'
+echo '導入完了。AI側の外向き通信はOFFです。閲覧はSSH転送で可能です。'
+echo '開閉操作は management/MTLS.md の手順でmTLS接続を追加してください。'
