@@ -1,0 +1,11 @@
+# Security
+
+RabbitWall is for a dedicated Linux gateway on a trusted management network. It is not an Internet-facing service or a general-purpose firewall manager.
+
+- The backend listens on loopback. Caddy requires a trusted, explicitly permitted client certificate and the configured management-PC source IP.
+- The Internet gate starts closed. Its kernel permission expires after 20 seconds unless renewed by the controller. Closing also blocks established AI-originated connections and AI DNS input/relay/replies. Management SSH and gateway-originated updates remain available.
+- The baseline permits public IPv4 HTTP/HTTPS and NTP. HTTPS includes potential DoH, tunnels and data upload. Domain hints and country estimates are observations, not enforcement of application identity. IPv6 and alternate network paths need attention on the AI hosts too.
+- DNS first-seen information, session history and traffic aggregates reveal network activity. Keep the host, backups and generated reports private. The original CA key and client private key stay on the management PC.
+- Installing replaces this dedicated host's nftables ruleset. UFW/firewalld/Docker, hardware flow offload, custom routing and other network managers are outside automatic integration. Use a local recovery console and review the generated plan.
+
+Please do not include certificates, private keys, passwords, actual traffic logs or device backups in public issues. If the repository owner has enabled GitHub private vulnerability reporting, use that channel. Otherwise contact the owner privately before publishing an exploit; no private reporting address is bundled with this source.

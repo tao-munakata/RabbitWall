@@ -1,0 +1,2 @@
+# Runtime DNS protocol library. On Debian/Ubuntu prefer apt install python3-dnspython.
+dnspython>=2.6.1,<3

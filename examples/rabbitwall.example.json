@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "label": "RabbitWall",
+  "uplink_if": "eth0",
+  "uplink_cidr": "192.168.10.2/24",
+  "gateway": "192.168.10.1",
+  "management_cidr": "192.168.10.0/24",
+  "admin_ip": "192.168.10.10",
+  "ai_if": "eth1",
+  "ai_cidr": "192.168.20.1/24",
+  "dns_upstream": "192.168.10.1",
+  "nat": true,
+  "console_name": "rabbitwall.home.arpa",
+  "site_label": "LAN拠点",
+  "site_location": [139, 36],
+  "nodes": [
+    {"id": "gateway", "label": "Gateway", "ip": "192.168.10.1", "interface": "eth0"},
+    {"id": "ai-host", "label": "AI Host", "ip": "192.168.20.10", "interface": "eth1"}
+  ]
+}

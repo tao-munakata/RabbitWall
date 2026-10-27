@@ -1,0 +1,27 @@
+name: Tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: pip install -r requirements.txt
+      - run: python -B -m unittest discover -s tests -p 'test_*.py'
+      - run: node tests/test_atlas.cjs
+      - run: python tools/release.py
+  kernel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t rabbitwall-gate-test -f tests/Dockerfile .
+      - run: docker run --rm --privileged --network none -e RABBITWALL_DISPOSABLE_TEST=1 -v "$PWD:/workspace:ro" -w /workspace rabbitwall-gate-test /usr/bin/python3 -B tests/linux_gate_smoke.py
+      - run: docker run --rm --privileged --network none -e RABBITWALL_DISPOSABLE_TEST=1 -e RABBITWALL_CONFIG=/workspace/examples/rabbitwall.example.json -v "$PWD:/workspace:ro" -w /workspace rabbitwall-gate-test /usr/bin/python3 -B tests/public_network_smoke.py
+      - run: docker run --rm --privileged --network none -e RABBITWALL_DISPOSABLE_TEST=1 -v "$PWD:/workspace:ro" -w /workspace rabbitwall-gate-test /usr/bin/python3 -B tests/deployment_smoke.py

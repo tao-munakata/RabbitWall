@@ -26,3 +26,10 @@ control.token
 *.pfx
 *.csr
 key.pem
+
+# Public installer local configuration and Python environment
+/console.json
+/install-plan/
+.venv/
+
+/rabbitwall.json

@@ -1,6 +1,0 @@
-Static IPv4: 10.1.0.10/24
-Gateway:     10.1.0.1
-DNS:         10.0.0.254
-IPv6:        disabled on this connection
-Disable Wi-Fi / alternative upstream paths.
-No DHCP server is included in this configuration.
