@@ -122,3 +122,21 @@ th{font-size:12px;letter-spacing:.5px}td,td.mono,.country{font-size:13px}
 @media(min-width:851px){.map-shell{grid-template-columns:minmax(0,1fr) 340px}}
 @media(min-width:851px) and (max-width:1100px){.map-shell{grid-template-columns:minmax(0,1fr) 300px}}
 @media(max-width:600px){.node-row strong{font-size:16px}.node-row code{font-size:13px}.node-row small{font-size:12px}.atlas-toolbar .map-actions{max-width:130px}}
+
+/* Traffic analysis stays in its own page; the map keeps its full-height layout. */
+.new-domain-badge{display:inline-block;margin-left:7px;padding:1px 5px;border:1px solid var(--accent);color:var(--accent);font:700 12px -apple-system,sans-serif;line-height:1.5;vertical-align:middle;white-space:nowrap}
+.analytics-panel{margin-bottom:18px;min-width:0}.analytics-panel>.list-heading{padding:14px 16px}
+.analytics-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:16px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.analytics-toolbar label{display:flex;align-items:center;gap:8px}.analytics-toolbar select{font-size:13px;padding:8px}
+#ranking-period{font-size:12px;color:var(--muted)}.analytics-totals{display:flex;flex-wrap:wrap;gap:24px;align-items:center;padding:16px;font-size:13px}
+.analytics-totals strong{font:600 22px ui-monospace,monospace;margin-left:9px}#ranking-coverage{font-size:12px;color:var(--muted)}
+.analytics-panel .table-wrap{max-height:480px;overflow:auto}.ranking-destination{overflow-wrap:anywhere;min-width:220px;max-width:650px}.ranking-destination small{white-space:normal}
+@media(max-width:600px){.analytics-toolbar{gap:10px}.analytics-totals{gap:12px}.analytics-totals strong{font-size:18px}.nav{padding-block:10px}}
+.analytics-panel .table-wrap{min-height:0}
+
+/* Match the map and node dock's supporting text to the readable route list. */
+.node-row small,.node-panel .section-title>small,.section-title>small{font-size:13px}
+.node-row code{font-size:14px}.node-row strong{font-size:17px}
+.atlas-title small,#atlas-summary,.map-actions .export,.gate-current #gate-caption,.gate-panel .hint{font-size:13px}
+.atlas-legend,.map-credit{font-size:12px}
+@media(max-width:600px){.node-row small{font-size:13px}.node-row code{font-size:14px}.atlas-title small{letter-spacing:0}}

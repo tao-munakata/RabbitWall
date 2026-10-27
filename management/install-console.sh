@@ -28,6 +28,7 @@ install -m 0644 "$base/taco-console/console.py" /opt/taco-console/console.py
 if [ "$mode" != '--update-console' ]; then
     install -m 0644 "$base/taco-console/control.py" /opt/taco-console/control.py
 fi
+install -m 0644 "$base/taco-console/traffic_analytics.py" /opt/taco-console/traffic_analytics.py
 install -m 0644 "$base/taco-console/dns_observations.py" /opt/taco-console/dns_observations.py
 install -m 0644 "$base/taco-console/geoip.py" /opt/taco-console/geoip.py
 install -m 0644 "$base/update_geoip.py" /opt/taco-console/update_geoip.py

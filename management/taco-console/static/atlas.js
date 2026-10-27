@@ -53,11 +53,12 @@
   }
   function pacificInset(width,height) {
     const anchor=projection([202,7],width,height);
-    const boxWidth=Math.min(360,Math.max(260,width*.29),width-28), boxHeight=Math.min(190,Math.max(145,height-116));
-    const minY=Math.min(170,Math.max(82,height-boxHeight-20));
+    const boxWidth=Math.min(400,Math.max(330,width*.4),width-28);
+    const boxHeight=Math.min(280,Math.max(220,height*.68),height-96);
+    const minY=Math.min(100,Math.max(32,height-boxHeight-12));
     const minX=width>1100 ? 244 : 14, maxX=Math.max(minX,width-boxWidth-(width>1100 ? 250 : 14));
     return {x:Math.max(minX,Math.min(maxX,anchor.x-boxWidth/2)),
-      y:Math.max(minY,Math.min(height-boxHeight-20,anchor.y-boxHeight/2+52)),width:boxWidth,height:boxHeight};
+      y:Math.max(minY,Math.min(height-boxHeight-12,anchor.y-boxHeight*.35+38)),width:boxWidth,height:boxHeight};
   }
   function toggledSelection(current,key) { return current===key ? null : key; }
 
@@ -145,6 +146,10 @@
         sub.textContent = `${route.service} · ${route.count} セッション`;
         const names = [...new Set(route.flows.flatMap(f => (f.domain_hints || []).map(h => h.domain)))];
         if (names.length) sub.textContent += " · 推定: " + names.slice(0, 2).join(" / ");
+        if (route.flows.some(f => (f.domain_hints || []).some(h => h.is_new))) {
+          const badge = document.createElement("span"); badge.className = "new-domain-badge";
+          badge.textContent = "新"; badge.title = "初めて観測してから24時間以内のドメイン"; line.append(badge);
+        }
         button.append(line, sub); button.addEventListener("click", () => this.select(route.key)); this.list.append(button);
         if (route.key === focused) button.focus({preventScroll:true});
       }
@@ -164,7 +169,7 @@
         this.detail.append(line);
         if (flow.domain_hints?.length) {
           const hint = document.createElement("small");
-          hint.textContent = "推定ドメイン: " + flow.domain_hints.map(h => h.domain).join(" / ");
+          hint.textContent = "推定ドメイン: " + flow.domain_hints.map(h => (h.is_new ? "【新】" : "") + h.domain).join(" / ");
           this.detail.append(hint);
         }
       }
@@ -197,16 +202,20 @@
       const extras=this.model.nodes.filter(node=>node.kind==="local" && !known.some(host=>host.ips.includes(node.ip)));
       const hosts=[...known,...extras.slice(0,2).map(node=>({...node,glyph:"端",ips:[node.ip]}))];
       if(extras.length>2)hosts.push({label:`他${extras.length-2}端点`,glyph:"他",ip:"",ips:extras.slice(2).map(node=>node.ip)});
-      const columns=hosts.length>4 ? 3 : 2, rows=Math.ceil(hosts.length/columns);
+      const columns=hosts.length===4 && this.inset.height<210 && this.inset.width>=328 ? 4 : hosts.length>4 ? 3 : 2;
+      const rows=Math.ceil(hosts.length/columns);
       hosts.forEach((host,index)=>{
         const point={x:this.inset.x+this.inset.width*(index%columns+.5)/columns,
-          y:this.inset.y+48+(this.inset.height-62)*(Math.floor(index/columns)+.35)/rows,
+          y:this.inset.y+(rows===1 ? (this.inset.height<160 ? 49 : (this.inset.height+30)/2) :
+            72+(this.inset.height-136)*Math.floor(index/columns)/(rows-1)),
           node:{...host,kind:"local",observed:this.model.nodes.some(node=>host.ips.includes(node.ip))}};
         for(const ip of host.ips)this.points.set("local:"+ip,point);
       });
       for (const node of this.model.nodes) {
         if (node.kind === "country") this.points.set(node.key, {...this.project(node.point), node});
-        if (node.kind === "unknown") this.points.set(node.key, {x:this.inset.x+this.inset.width*.5,y:this.inset.y+this.inset.height+40,node});
+        if (node.kind === "unknown") this.points.set(node.key, {
+          x:this.inset.x>=160 ? this.inset.x-80 : this.inset.x+this.inset.width*.5,
+          y:this.inset.x>=160 ? this.inset.y+this.inset.height-24 : this.inset.y+this.inset.height+40,node});
       }
       this.paths = this.model.routes.map(route => {
         const a=this.points.get(route.src.key), c=this.points.get(route.dst.key), distance=Math.hypot(a.x-c.x,a.y-c.y);
@@ -240,11 +249,11 @@
       ctx.strokeStyle=this.color("#df8a36");ctx.lineWidth=1;ctx.setLineDash([4,6]);ctx.beginPath();ctx.moveTo(japan.x,japan.y);ctx.lineTo(box.x,box.y+16);ctx.stroke();ctx.setLineDash([]);
       if(!this.model.nodes.some(node=>node.kind==="country" && node.code==="JP")){
         ctx.fillStyle=this.color("#fca132");ctx.beginPath();ctx.arc(japan.x,japan.y,3,0,Math.PI*2);ctx.fill();
-        ctx.font="11px -apple-system,sans-serif";ctx.fillText("日本 / JP",japan.x+9,japan.y-8);
+        ctx.font="13px -apple-system,sans-serif";ctx.fillText("日本 / JP",japan.x+9,japan.y-8);
       }
-      ctx.fillStyle=this.color("#07110fef");ctx.fillRect(box.x,box.y,box.width,box.height);ctx.strokeStyle=this.color("#e58b2e");ctx.strokeRect(box.x,box.y,box.width,box.height);
-      ctx.fillStyle=this.color("#ed9630");ctx.fillRect(box.x,box.y,box.width,26);ctx.fillStyle=this.color("#11100b");ctx.font="bold 11px -apple-system,sans-serif";ctx.fillText("国内LAN / 日本拠点",box.x+12,box.y+17);
-      ctx.fillStyle=this.color("#92a593");ctx.font="10px ui-monospace,monospace";ctx.fillText("PACIFIC INSET · SCHEMATIC",box.x+12,box.y+box.height-9);
+      ctx.save();ctx.globalAlpha=this.theme==="white" ? .82 : .68;ctx.fillStyle=this.color("#07110fef");ctx.fillRect(box.x,box.y,box.width,box.height);ctx.restore();ctx.strokeStyle=this.color("#e58b2e");ctx.strokeRect(box.x,box.y,box.width,box.height);
+      ctx.fillStyle=this.color("#ed9630");ctx.fillRect(box.x,box.y,box.width,30);ctx.fillStyle=this.color("#11100b");ctx.font="bold 14px -apple-system,sans-serif";ctx.fillText("国内LAN / 日本拠点",box.x+12,box.y+21);
+      ctx.fillStyle=this.color("#92a593");ctx.font="12px -apple-system,sans-serif";ctx.fillText("日本拠点の配置図",box.x+12,box.y+box.height-7);
     }
     draw(now) {
       if (!this.width || !this.active) return;
@@ -272,13 +281,15 @@
         ctx.fillStyle=node.kind === "local" ? node.observed ? this.color("#ffb148") : this.color("#637b68") : node.kind === "unknown" ? this.color("#c5a671") : this.color("#63dfbb");
         const labelX=Math.max(65+this.offset.x,Math.min(this.width-65+this.offset.x,x));
         if(node.kind==="local"){
-          ctx.strokeStyle=ctx.fillStyle;ctx.lineWidth=1;ctx.strokeRect(x-9,y-9,18,18);ctx.font="bold 12px -apple-system,sans-serif";ctx.textAlign="center";ctx.fillText(node.glyph,x,y+4);
-          ctx.font="12px -apple-system,sans-serif";ctx.fillText(node.label,labelX,y-15);
-          ctx.font="10px ui-monospace,monospace";ctx.fillStyle=this.color("#8eac93");ctx.fillText(node.ip || "",labelX,y+21);
-          if(node.secondaryIP)ctx.fillText(node.secondaryIP,labelX,y+31);
+          const compact=this.inset.height<160;
+          ctx.textAlign="center";
+          if(!compact){ctx.strokeStyle=ctx.fillStyle;ctx.lineWidth=1;ctx.strokeRect(x-11,y-11,22,22);ctx.font="bold 16px -apple-system,sans-serif";ctx.fillText(node.glyph,x,y+5);}
+          ctx.fillStyle=this.color("#bddfcb");ctx.font="14px -apple-system,sans-serif";ctx.fillText(node.label,labelX,y+(compact ? 2 : -19));
+          ctx.font="13px ui-monospace,monospace";ctx.fillText(node.ip || "",labelX,y+(compact ? 20 : 23));
+          if(node.secondaryIP)ctx.fillText(node.secondaryIP,labelX,y+(compact ? 35 : 39));
         }else{
           ctx.shadowColor=ctx.fillStyle;ctx.shadowBlur=8;ctx.beginPath();ctx.arc(x,y,3.4,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
-          ctx.strokeStyle=this.color("#53967a99");ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.stroke();ctx.font="12px -apple-system,sans-serif";ctx.textAlign="center";ctx.fillStyle=this.color("#bddfcb");ctx.fillText(node.label,labelX,y-13);
+          ctx.strokeStyle=this.color("#53967a99");ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.stroke();ctx.font="13px -apple-system,sans-serif";ctx.textAlign="center";ctx.fillStyle=this.color("#bddfcb");ctx.fillText(node.label,labelX,y-13);
         }
       }
       ctx.textAlign="left";

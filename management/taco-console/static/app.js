@@ -41,7 +41,7 @@ function direction(flow) {
   return flow.scope === "MANAGEMENT" ? taco ? "LAN → Radxa" : "LAN → AI" : flow.scope === "TACO" ? "Radxa発信" : taco ? "AI → Radxa" : "AI → 上流";
 }
 function navigate() {
-  const pages = {monitor:"広域通信監視",sessions:"通信記録一覧",settings:"環境設定",topology:"構成情報"};
+  const pages = {monitor:"広域通信監視",sessions:"通信記録一覧",settings:"環境設定",analytics:"通信分析",topology:"構成情報"};
   const page = Object.hasOwn(pages, location.hash.slice(1)) ? location.hash.slice(1) : "monitor";
   for (const element of document.querySelectorAll("[data-page]")) element.hidden = element.dataset.page !== page;
   for (const link of document.querySelectorAll("[data-nav]")) {
@@ -157,6 +157,7 @@ function render() {
   if (snapshot.stale) notices.unshift("収集データが古くなっています。collectorサービスを確認してください。");
   $("notice").hidden = !notices.length; $("notice").textContent = notices.join("\n");
   renderGeoip();
+  renderAnalytics();
   const search = $("search").value.toLowerCase(), scope = $("scope").value, proto = $("proto").value;
   const matches = f => (scope === "all" || (scope === "related" ? ["AI", "MANAGEMENT"].includes(f.scope) : f.scope === scope)) && (proto === "all" || f.proto === proto) &&
     [...(f.domain_hints || []).map(h => h.domain), f.src, f.dst, f.sport, f.dport, f.proto, f.service, f.state, f.chain, direction(f), countryText(f.src_country), countryText(f.dst_country)].join(" ").toLowerCase().includes(search);
@@ -177,6 +178,7 @@ function render() {
       hints.textContent = "推定ドメイン: " + f.domain_hints.map(h => h.domain).join(" / ");
       hints.title = "同じ端末のDNS応答と宛先IPを照合した候補です。HTTPの接続先名を保証しません。";
       dstCell.append(hints);
+      if (f.domain_hints.some(h => h.is_new)) dstCell.append(newDomainBadge());
     }
     cell(row, countryText(f.dst_country), "country");
     cell(row, tab === "drops" ? f.proto : f.service + " / " + f.proto);
@@ -193,6 +195,52 @@ function render() {
     ? "約5秒ごとの観測履歴から直近500件を表示。終了済みの保存は24時間・全体目安2万件。短い通信は見逃す場合があります。観測終了はTCP切断時刻ではありません。"
     : "Radxaを通る通信を両方向の開始元で表示。LAN → AIの管理SSHも含みます。送受信量は開始元を基準にした累計、国はIPからの概算です。";
 }
+function newDomainBadge() {
+  const badge = document.createElement("span"); badge.className = "new-domain-badge";
+  badge.textContent = "新"; badge.title = "この機能で初めて観測してから24時間以内のドメイン";
+  return badge;
+}
+function timestampText(seconds) {
+  return Number.isFinite(seconds) ? new Date(seconds*1000).toLocaleString("ja-JP", {hour12:false}) : "—";
+}
+function renderAnalytics() {
+  const data = snapshot.analytics;
+  const windowData = data?.windows?.[$("ranking-window").value];
+  $("ranking-rows").replaceChildren(); $("new-domain-rows").replaceChildren();
+  $("ranking-period").textContent = data ? "集計開始 " + timestampText(data.since) : "収集サービスを更新してください";
+  $("ranking-tx").textContent = bytes(windowData?.tx_bytes);
+  $("ranking-rx").textContent = bytes(windowData?.rx_bytes);
+  const coverage = data?.coverage;
+  $("ranking-coverage").textContent = !coverage?.available ? "通信量収集を確認中" : coverage.missing
+    ? `追跡 ${coverage.tracked}件 / カウンター未取得 ${coverage.missing}件` : `追跡 ${coverage.tracked}件`;
+  if (coverage?.missing) $("ranking-coverage").textContent += " · nf_conntrack_acctと新規接続を確認";
+  const sort = $("ranking-sort").value;
+  const amount = row => sort === "tx" ? row.tx_bytes : sort === "rx" ? row.rx_bytes : row.tx_bytes+row.rx_bytes;
+  const rows = [...(windowData?.[$("ranking-group").value === "ip" ? "by_ip" : "by_domain"] || [])]
+    .sort((a,b) => amount(b)-amount(a) || a.label.localeCompare(b.label)).slice(0,20);
+  for (const [index, entry] of rows.entries()) {
+    const row = document.createElement("tr"); cell(row, index+1);
+    const destination = cell(row, entry.label, "ranking-destination");
+    const detail = document.createElement("small"); detail.className = "endpoint-country";
+    detail.textContent = $("ranking-group").value === "ip"
+      ? (entry.domains.length ? "推定: " + entry.domains.join(" / ") : "ドメイン不明")
+      : entry.addresses.join(" / ") + (entry.label.startsWith("複数候補") ? " · " + entry.domains.join(" / ") : "");
+    destination.append(detail);
+    cell(row, bytes(entry.tx_bytes), "mono"); cell(row, bytes(entry.rx_bytes), "mono");
+    cell(row, bytes(entry.tx_bytes+entry.rx_bytes), "mono"); $("ranking-rows").append(row);
+  }
+  if (!rows.length) { const row = document.createElement("tr"); cell(row, "集計対象の通信量はまだありません。", "empty").colSpan=5; $("ranking-rows").append(row); }
+  $("new-domain-count").textContent = data ? `24時間以内 ${data.new_domain_count}件 / 既知 ${data.known_domain_count}件` : "—";
+  $("domain-catalogue").textContent = "この機能で初めて観測してから24時間を「新」と表示。既知ドメインは再起動後も保持します。DNS問い合わせの観測であり、接続の成立を示すものではありません。直近100件を表示。" +
+    (data?.domain_limit_reached ? " 台帳が上限10万件に達しました。未登録ドメインの新規判定は停止しています。" : "");
+  for (const entry of data?.new_domains || []) {
+    const row = document.createElement("tr"), name = cell(row, entry.domain, "ranking-destination");
+    name.append(newDomainBadge()); cell(row, timestampText(entry.first_seen), "mono");
+    cell(row, timestampText(entry.last_seen), "mono"); $("new-domain-rows").append(row);
+  }
+  if (!data?.new_domains?.length) { const row=document.createElement("tr"); cell(row,"新しく観測したドメインはありません。","empty").colSpan=3; $("new-domain-rows").append(row); }
+}
+for (const id of ["ranking-window", "ranking-group", "ranking-sort"]) $(id).addEventListener("change", () => snapshot && renderAnalytics());
 async function refresh() {
   try {
     const response = await fetch("/api/state", {cache:"no-store", signal:AbortSignal.timeout(8000)});

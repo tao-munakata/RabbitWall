@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 from control import TOKEN, request_control
 from geoip import CountryLookup, DEFAULT_DATABASE
 from dns_observations import load_observations, domain_hints
+from traffic_analytics import collect_analytics
 
 AI = ipaddress.ip_network("10.1.0.0/24")
 LAN = ipaddress.ip_network("10.0.0.0/24")
@@ -131,7 +132,7 @@ def command(args, empty_ok=False):
         return "", f"{args[0]}: {exc}"
 
 
-def update_history(db, flows, now, retention_hours=24, row_limit=20000, dns_records=None):
+def update_history(db, flows, now, retention_hours=24, row_limit=20000, dns_records=None, commit=True):
     """Poll observations, not a claim of complete connection-event capture."""
     db.execute("CREATE TABLE IF NOT EXISTS flows (key TEXT PRIMARY KEY, first_seen TEXT, "
                "last_seen TEXT, ended_at TEXT, data TEXT)")
@@ -156,7 +157,8 @@ def update_history(db, flows, now, retention_hours=24, row_limit=20000, dns_reco
     db.execute("DELETE FROM flows WHERE last_seen < ? AND ended_at IS NOT NULL", (cutoff,))
     db.execute("DELETE FROM flows WHERE key IN (SELECT key FROM flows WHERE ended_at IS NOT NULL "
                "ORDER BY last_seen DESC LIMIT -1 OFFSET ?)", (max(0, row_limit - len(flows)),))
-    db.commit()
+    if commit:
+        db.commit()
     rows = db.execute("SELECT data,ended_at FROM flows ORDER BY last_seen DESC LIMIT 500").fetchall()
     return [dict(json.loads(data), ended_at=ended) for data, ended in rows]
 
@@ -178,6 +180,7 @@ def atomic_json(path, data):
 
 def collect_once(db, state_path, interval):
     now, errors = utc_now(), []
+    dns_records = load_observations()
     raw, error = command(["conntrack", "-L", "-f", "ipv4", "-o", "extended,id"])
     if error:
         errors.append(error)
@@ -186,7 +189,8 @@ def collect_once(db, state_path, interval):
         history = []
     else:
         flows = parse_conntrack(raw)
-        history = update_history(db, flows, now, dns_records=load_observations())
+        history = update_history(db, flows, now, dns_records=dns_records, commit=False)
+    analytics = collect_analytics(db, flows if error is None else None, dns_records, now, history)
     journal, journal_error = command(["journalctl", "-k", "--since", "5 minutes ago",
                                      "-n", "1000", "--no-pager", "--quiet", "-o", "json",
                                      "--grep", "taco-(input|forward|output)-drop"], empty_ok=True)
@@ -194,7 +198,7 @@ def collect_once(db, state_path, interval):
         errors.append(journal_error)
     atomic_json(state_path, {"updated_at": now, "interval": interval, "demo": False,
                             "collector_ok": error is None, "errors": errors,
-                            "flows": flows, "history": history,
+                            "flows": flows, "history": history, "analytics": analytics,
                             "drops": parse_journal(journal)[:200]})
 
 
@@ -208,10 +212,17 @@ def demo_state():
     flows = parse_conntrack(raw)
     for flow in flows:
         flow.update(first_seen=now, last_seen=now)
-        flow["domain_hints"] = ([{"domain": "one.one.one.one", "observed_at": time.time(),
+        flow["domain_hints"] = ([{"domain": "one.one.one.one", "observed_at": dt.datetime.fromisoformat(now).timestamp()-10,
                                   "expires_at": time.time()+300, "client": flow["src"], "address": flow["dst"]}]
                                 if flow["dst"] == "1.1.1.1" else [])
-    return {"updated_at": now, "interval": 5, "demo": True, "collector_ok": True,
+    demo_db = sqlite3.connect(":memory:")
+    collect_analytics(demo_db, flows, [], (dt.datetime.fromisoformat(now)-dt.timedelta(seconds=5)).isoformat())
+    for flow in flows:
+        if flow['scope'] == 'AI':
+            flow['tx_bytes'] *= 3; flow['rx_bytes'] *= 4
+    analytics = collect_analytics(demo_db, flows, [], now)
+    demo_db.close()
+    return {"analytics": analytics, "updated_at": now, "interval": 5, "demo": True, "collector_ok": True,
             "errors": [], "flows": flows, "history": [dict(f, ended_at=None) for f in flows],
             "drops": [{"time": now, "scope": "AI", "chain": "forward", "src": "10.1.0.10",
                        "dst": "10.0.0.20", "proto": "TCP", "sport": "50123", "dport": "22",
