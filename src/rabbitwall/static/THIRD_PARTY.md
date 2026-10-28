@@ -20,3 +20,7 @@ The source archive does not contain this database. The console retains the provi
 ## Application assets
 
 JavaScript, CSS and visualization code are maintained in this repository. No external JavaScript library, CDN, web font, NICTER code, logo or imagery is bundled. The RabbitWall hero image is project-generated artwork.
+
+## dnstap and external DNS components
+
+The bundled official dnstap schema and generated Python binding use the schema's CC0 dedication. See [schema provenance and rebuild instructions](../../../third_party/dnstap/README.md). Unbound (BSD license) and Python Protocol Buffers (BSD 3-Clause) are installed separately, not bundled in the source archive. dnspython remains an external ISC-licensed dependency for parsing observation messages, not DNS forwarding.

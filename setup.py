@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RabbitWall setup: init, plan, check, install and doctor. Stdlib only."""
+"""RabbitWall setup: init, plan, check, install, reconfigure, update and doctor. Stdlib only."""
 import argparse
 import datetime as dt
 import importlib.util
@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / 'src/rabbitwall'))
 from settings import validate, load
 
-DEPENDENCIES = ['python3', 'python3-dnspython', 'conntrack', 'nftables', 'iproute2', 'iputils-ping', 'kmod']
+DEPENDENCIES = ['python3', 'python3-dnspython', 'python3-protobuf', 'unbound', 'conntrack', 'nftables', 'iproute2', 'iputils-ping', 'kmod']
 
 
 def run(*args, **kwargs):
@@ -51,10 +51,11 @@ def assets(config):
     """Render a complete dedicated-router firewall; never merge arbitrary host rules."""
     c = validate(config)
     from firewall import baseline, gate, dns_rule, probe_rules, SYSCTL
+    from unbound_config import render
     firewall = baseline(c)
     gate_rules = gate(c) + dns_rule(c) + probe_rules(c)
     sysctl = SYSCTL
-    result = {'rabbitwall.nft':gate_rules, 'nftables.conf':firewall, '90-rabbitwall-router.conf':sysctl,
+    result = {'unbound.conf':render(c), 'rabbitwall.nft':gate_rules, 'nftables.conf':firewall, '90-rabbitwall-router.conf':sysctl,
               'rabbitwall-monitor.conf':'nf_conntrack\n',
               '90-rabbitwall-ai.conf':f'[device-rabbitwall-ai]\nmatch-device=interface-name:{c["ai_if"]}\nignore-carrier=yes\n'}
     for name, device, cidr, gateway in [('rabbitwall-uplink',c['uplink_if'],c['uplink_cidr'],c['gateway']),
@@ -114,22 +115,25 @@ def port_conflicts(output, port, config):
     return False
 
 
-def check(config, require_addresses=False):
+def check(config, require_addresses=False, inspect_ports=True):
     errors = []
     if sys.platform != 'linux': errors.append('Install on Linux; init/plan/demo also work on macOS.')
-    for program in ('python3','nft','conntrack','ip','ping','nmcli','systemctl','journalctl','sysctl','modprobe'):
+    for program in ('python3','nft','conntrack','ip','ping','nmcli','systemctl','journalctl','sysctl','modprobe','unbound','unbound-checkconf'):
         if not shutil.which(program): errors.append(f'Missing command: {program}')
     if shutil.which('systemctl'):
-        for service in ('NetworkManager','ufw','firewalld','docker'):
+        for service in ('NetworkManager','ufw','firewalld','docker','unbound'):
             active = subprocess.run(['systemctl','is-active','--quiet',service], capture_output=True).returncode == 0
             if service == 'NetworkManager' and not active: errors.append('NetworkManager must already be running (do not replace a different network manager remotely).')
             if service != 'NetworkManager' and active: errors.append(f'Conflicting service: {service}; use a dedicated gateway.')
     for device in (config['uplink_if'],config['ai_if']):
         if sys.platform == 'linux' and not (Path('/sys/class/net')/device).exists(): errors.append(f'NIC not found: {device}')
-    from dependencies import require_dns
-    try: require_dns()
+    from dependencies import require_observer
+    from unbound_config import require_unbound
+    try:
+        require_observer()
+        require_unbound()
     except ValueError as error: errors.append(str(error))
-    if shutil.which('ss'):
+    if inspect_ports and shutil.which('ss'):
         for port in (53,443,8765):
             result = subprocess.run(['ss','-H','-lntup',f'sport = :{port}'],capture_output=True,text=True)
             if result.returncode: errors.append('Could not inspect listening ports with ss')
@@ -144,23 +148,71 @@ def check(config, require_addresses=False):
     print('Preflight OK')
 
 
-def install(plan_dir, apply):
+def mtls_assets(config):
+    """Rebind an existing mTLS endpoint without replacing its identities or keys."""
+    root = Path('/etc/rabbitwall-mtls')
+    if not (root/'Caddyfile').exists():
+        if Path('/etc/nftables.d/rabbitwall-web.nft').exists():
+            raise ValueError('Incomplete mTLS installation; repair it before reconfiguring')
+        return {}
+    sys.path.insert(0, str(ROOT/'tools'))
+    import mtls
+    mtls.RUNTIME_CONFIG = config
+    mtls.SERVER_IP = str(ipaddress.IPv4Interface(config['uplink_cidr']).ip)
+    mtls.SERVER_NAME = config['console_name']
+    run('openssl','verify','-CAfile',root/'ca.crt','-purpose','sslserver',
+        '-verify_hostname',config['console_name'],root/'server.crt')
+    text = mtls.caddyfile(config['admin_ip'])
+    with tempfile.TemporaryDirectory() as directory:
+        candidate = Path(directory)/'Caddyfile'; candidate.write_text(text)
+        run('caddy','validate','--config',candidate,'--adapter','caddyfile')
+    rule = (f'insert rule inet rabbitwall_filter input iifname "{config["uplink_if"]}" '
+            f'ip saddr {config["admin_ip"]} ip daddr {mtls.SERVER_IP} '
+            'tcp dport 443 counter accept comment "rabbitwall-mtls"\n')
+    return {'/etc/rabbitwall-mtls/Caddyfile':text,
+            '/etc/nftables.d/rabbitwall-web.nft':rule}
+
+
+def reconfigure(config_path, apply):
+    if os.geteuid()!=0: raise ValueError('Run reconfigure with sudo on the RabbitWall host')
+    if not apply: raise ValueError('Use a local console; reconfigure requires --apply-network')
+    if not Path('/etc/rabbitwall.json').exists() or not Path('/opt/rabbitwall/control.py').exists():
+        raise ValueError('RabbitWall is not installed; use setup.py install')
+    config = load(config_path)
+    # Snapshot a validated plan so a concurrently edited input cannot change the operation.
+    with tempfile.TemporaryDirectory() as directory:
+        plan_dir = Path(directory)/'plan'
+        plan(config, plan_dir)
+        install(plan_dir, True, reapply=True)
+
+
+def install(plan_dir, apply, reapply=False):
     if os.geteuid()!=0: raise ValueError('Run install with sudo on the dedicated Linux gateway')
     if not apply: raise ValueError('Review the plan first; initial install requires --apply-network')
-    config = load(plan_dir/'config.json'); check(config)
-    for name in ('rabbitwall-uplink','rabbitwall-ai'):
+    config = load(plan_dir/'config.json'); check(config, inspect_ports=not reapply)
+    from unbound_config import check_config, render
+    check_config(render(config))
+    for name in (() if reapply else ('rabbitwall-uplink','rabbitwall-ai')):
         if (Path('/etc/NetworkManager/system-connections')/(name+'.nmconnection')).exists():
             raise ValueError('Generated profile name already exists; inspect NetworkManager before installing')
-    if Path('/etc/rabbitwall.json').exists() or Path('/opt/rabbitwall/control.py').exists():
-        raise ValueError('RabbitWall is already installed; use setup.py update')
+    if not reapply and (Path('/etc/rabbitwall.json').exists() or Path('/opt/rabbitwall/control.py').exists()):
+        raise ValueError('RabbitWall is already installed; use setup.py update for code, or setup.py reconfigure --config rabbitwall.json --apply-network for network settings')
     expected = assets(config)
     for name, content in expected.items():
         if (plan_dir/name).read_text()!=content: raise ValueError(f'Plan was changed: {name}; regenerate it from the JSON config')
-    run('nft','-c','-f','-', input=expected['nftables.conf'].replace('include "/etc/nftables.d/rabbitwall.nft"', expected['rabbitwall.nft']), text=True)
+    web = mtls_assets(config) if reapply else {}
+    if web:
+        expected['nftables.conf'] += '\ninclude "/etc/nftables.d/rabbitwall-web.nft"\n'
+    firewall_text = expected['nftables.conf'].replace(
+        'include "/etc/nftables.d/rabbitwall.nft"', expected['rabbitwall.nft'])
+    if web:
+        firewall_text = firewall_text.replace('include "/etc/nftables.d/rabbitwall-web.nft"',
+                                              web['/etc/nftables.d/rabbitwall-web.nft'])
+    run('nft','-c','-f','-', input=firewall_text, text=True)
     backup = Path('/var/backups/rabbitwall')/dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     backup.mkdir(parents=True,mode=0o700)
     for path in ['/etc/nftables.conf','/etc/rabbitwall.json','/etc/nftables.d/rabbitwall.nft','/etc/NetworkManager/system-connections',
-                 '/etc/NetworkManager/conf.d/90-rabbitwall-ai.conf','/etc/sysctl.d/90-rabbitwall-router.conf','/etc/modules-load.d/rabbitwall-monitor.conf']:
+                 '/etc/NetworkManager/conf.d/90-rabbitwall-ai.conf','/etc/sysctl.d/90-rabbitwall-router.conf','/etc/modules-load.d/rabbitwall-monitor.conf', '/etc/rabbitwall-mtls/Caddyfile', '/etc/nftables.d/rabbitwall-web.nft', '/etc/rabbitwall-unbound.conf']:
         source=Path(path)
         if source.exists():
             target=backup/path.lstrip('/');target.parent.mkdir(parents=True,exist_ok=True)
@@ -172,34 +224,61 @@ def install(plan_dir, apply):
     (backup/'restore.sh').write_text('''#!/bin/sh
 set -eu
 base=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-systemctl disable --now rabbitwall-dns rabbitwall-web rabbitwall-control rabbitwall-collector rabbitwall-caddy 2>/dev/null || true
+systemctl disable --now rabbitwall-dns-observer rabbitwall-dns rabbitwall-web rabbitwall-control rabbitwall-collector rabbitwall-caddy 2>/dev/null || true
 nft -f "$base/runtime.nft"
 if [ ! -f "$base/nftables-was-enabled" ]; then systemctl disable nftables; fi
-for file in /etc/nftables.conf /etc/rabbitwall.json /etc/nftables.d/rabbitwall.nft /etc/NetworkManager/conf.d/90-rabbitwall-ai.conf /etc/sysctl.d/90-rabbitwall-router.conf /etc/modules-load.d/rabbitwall-monitor.conf; do
+for file in /etc/nftables.conf /etc/rabbitwall.json /etc/nftables.d/rabbitwall.nft /etc/NetworkManager/conf.d/90-rabbitwall-ai.conf /etc/sysctl.d/90-rabbitwall-router.conf /etc/modules-load.d/rabbitwall-monitor.conf /etc/rabbitwall-mtls/Caddyfile /etc/nftables.d/rabbitwall-web.nft /etc/rabbitwall-unbound.conf; do
     if [ ! -f "$base$file" ]; then rm -f "$file"; fi
 done
 cp -a "$base/etc/." /etc/
-rm -f /etc/NetworkManager/system-connections/rabbitwall-uplink.nmconnection /etc/NetworkManager/system-connections/rabbitwall-ai.nmconnection
+for name in rabbitwall-uplink rabbitwall-ai; do
+    if [ ! -f "$base/etc/NetworkManager/system-connections/$name.nmconnection" ]; then
+        rm -f "/etc/NetworkManager/system-connections/$name.nmconnection"
+    fi
+done
 nmcli general reload
 nmcli connection reload
 echo 'Saved configuration restored. Reboot locally to reactivate the original profiles.'
-''');(backup/'restore.sh').chmod(0o700)
+'''.replace('systemctl disable --now rabbitwall-', 'systemctl stop rabbitwall-' if reapply else 'systemctl disable --now rabbitwall-'));(backup/'restore.sh').chmod(0o700)
+    print(f'Network backup and recovery: {backup}/restore.sh', flush=True)
+    if reapply:
+        for service in ('rabbitwall-caddy','rabbitwall-web','rabbitwall-collector',
+                        'rabbitwall-dns-observer','rabbitwall-dns','rabbitwall-control'):
+            state = subprocess.check_output(['systemctl','show','-p','LoadState','--value',service],text=True).strip()
+            if state != 'not-found': run('systemctl','stop',service)
+        # Fail closed before checking ports or touching persistent settings.
+        run('nft','-f','-', input=firewall_text, text=True)
+        check(config)
     # Prepare files and closed firewall before activating either new connection.
     shutil.copyfile(plan_dir/'config.json','/etc/rabbitwall.json');os.chmod('/etc/rabbitwall.json',0o644)
     targets={'rabbitwall.nft':'/etc/nftables.d/rabbitwall.nft','nftables.conf':'/etc/nftables.conf','90-rabbitwall-router.conf':'/etc/sysctl.d/90-rabbitwall-router.conf',
              'rabbitwall-monitor.conf':'/etc/modules-load.d/rabbitwall-monitor.conf',
              '90-rabbitwall-ai.conf':'/etc/NetworkManager/conf.d/90-rabbitwall-ai.conf'}
     for name,target in targets.items():
-        Path(target).parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(plan_dir/name,target);os.chmod(target,0o644)
+        Path(target).parent.mkdir(parents=True,exist_ok=True);Path(target).write_text(expected[name]);os.chmod(target,0o644)
+    if reapply:
+        # Prevent the previously active profiles from winning at the next boot.
+        # Select by UUID, since connection names can be duplicated or renamed.
+        active = subprocess.check_output(
+            ['nmcli','-t','-f','UUID,DEVICE','connection','show','--active'],text=True)
+        for line in active.splitlines():
+            identity, _, device = line.partition(':')
+            if device in (config['uplink_if'],config['ai_if']):
+                run('nmcli','connection','modify','uuid',identity,'connection.autoconnect','no')
     for name in ('rabbitwall-uplink','rabbitwall-ai'):
         target=Path('/etc/NetworkManager/system-connections')/(name+'.nmconnection')
         shutil.copyfile(plan_dir/target.name,target);target.chmod(0o600)
+    for name, content in web.items():
+        Path(name).write_text(content)  # Preserve the existing owner and permissions.
     run('modprobe','nf_conntrack');run('sysctl','-p','/etc/sysctl.d/90-rabbitwall-router.conf')
     run('nft','-f','/etc/nftables.conf');run('systemctl','enable','nftables')
     run('nmcli','general','reload');run('nmcli','connection','reload')
-    run('nmcli','connection','up','rabbitwall-uplink');run('nmcli','connection','up','rabbitwall-ai')
+    for name, device in (('rabbitwall-uplink',config['uplink_if']),('rabbitwall-ai',config['ai_if'])):
+        run('nmcli','connection','up','uuid',str(uuid.uuid5(uuid.NAMESPACE_DNS,'rabbitwall.'+name+'.'+device)))
+    if reapply: check(config, require_addresses=True)
     deploy_application(config)
-    print(f'Installed, gate CLOSED. Backup and recovery: {backup}. Next: docs/INSTALL.md (mTLS).')
+    if web: run('systemctl','restart','rabbitwall-caddy')
+    print(f'{"Reconfigured" if reapply else "Installed"}, gate CLOSED. Backup and recovery: {backup}.')
 
 
 def deploy_application(config):
@@ -209,7 +288,7 @@ def deploy_application(config):
 
 
 def doctor():
-    for name in ('nftables','rabbitwall-control','rabbitwall-dns','rabbitwall-collector','rabbitwall-web','rabbitwall-caddy'):
+    for name in ('nftables','rabbitwall-control','rabbitwall-dns','rabbitwall-dns-observer','rabbitwall-collector','rabbitwall-web','rabbitwall-caddy'):
         subprocess.run(['systemctl','is-active',name],check=False)
     for args in [('ip','-br','-4','addr'),('ss','-lntup'),('nft','list','table','inet','rabbitwall_console')]:
         subprocess.run(args,check=False)
@@ -226,6 +305,7 @@ def main():
     cmd=sub.add_parser('demo');cmd.add_argument('--config',type=Path,default=ROOT/'examples/rabbitwall.example.json');cmd.add_argument('--port',type=int,default=8766)
     sub.add_parser('doctor')
     sub.add_parser('update')
+    cmd=sub.add_parser('reconfigure');cmd.add_argument('--config',type=Path,default=Path('rabbitwall.json'));cmd.add_argument('--apply-network',action='store_true')
     args=parser.parse_args()
     try:
         if args.command=='init':init(args.config,args.defaults)
@@ -237,6 +317,7 @@ def main():
             env=dict(os.environ,RABBITWALL_CONFIG=str(args.config.resolve()))
             run(sys.executable,'-B',ROOT/'src/rabbitwall/console.py','demo','--port',args.port,
                 '--state-dir',Path(tempfile.gettempdir())/'rabbitwall-demo',env=env)
+        elif args.command=='reconfigure':reconfigure(args.config,args.apply_network)
         elif args.command=='update':
             if os.geteuid()!=0: raise ValueError('Run update with sudo on the gateway')
             deploy_application(load(Path('/etc/rabbitwall.json')))

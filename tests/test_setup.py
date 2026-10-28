@@ -53,19 +53,33 @@ class Setup(unittest.TestCase):
         with patch.object(setup.os,'geteuid',return_value=0),self.assertRaisesRegex(ValueError,'--apply-network'):
             setup.install(Path('/not-used'),False)
 
+    def test_reconfigure_requires_explicit_network_apply_before_changes(self):
+        with patch.object(setup.os, 'geteuid', return_value=0), patch.object(setup, 'run') as run:
+            with self.assertRaisesRegex(ValueError, '--apply-network'):
+                setup.reconfigure(Path('/not-used'), False)
+            run.assert_not_called()
+
+    def test_reconfigure_validates_before_applying(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory)/'bad.json'
+            config.write_text(json.dumps(dict(self.config(), uplink_if='eth0; reboot')))
+            with patch.object(setup.os, 'geteuid', return_value=0), patch.object(Path, 'exists', return_value=True), patch.object(setup, 'install') as install:
+                with self.assertRaises(ValueError): setup.reconfigure(config, True)
+                install.assert_not_called()
+
     def test_runtime_settings_reach_dns_console_gate_and_analytics(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'settings.json';path.write_text(json.dumps(self.config()))
             import os
             env=dict(os.environ,RABBITWALL_CONFIG=str(path))
-            code='''import sys;sys.path.insert(0,sys.argv[1]);import settings,control,console,traffic_analytics,dns_forwarder
+            code='''import sys;sys.path.insert(0,sys.argv[1]);import settings,control,console,traffic_analytics,dnstap_observer,unbound_config
 assert console.scope('192.168.20.10')=='AI'
 assert console.scope('10.1.0.10') is None
 assert console.flow_scope('192.168.10.10','192.168.20.10')=='MANAGEMENT'
 assert '192.168.20.0/24' in control.GATE_RULES
 assert '192.168.20.1' in control.DNS_RULE
-assert str(dns_forwarder.BoundedServer.allowed)=='192.168.20.0/24'
-assert dns_forwarder.Relay().upstream=='192.168.10.1'
+assert str(dnstap_observer.AI_INTERFACE.network)=='192.168.20.0/24'
+assert 'forward-addr: 192.168.10.1' in unbound_config.render(settings.SETTINGS)
 assert console.demo_state()['flows'][0]['src']=='192.168.20.10'
 '''
             subprocess.run([sys.executable,'-B','-c',code,str(ROOT/'src/rabbitwall')],env=env,check=True)

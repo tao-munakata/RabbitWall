@@ -27,8 +27,10 @@ Obtain the public repository and work from its root directory. Run the following
 
 ```sh
 sudo apt update
-sudo apt install python3 python3-dnspython conntrack nftables iproute2 iputils-ping kmod
-python3 -c "import dns; print(dns.__version__)"
+sudo apt install python3 python3-dnspython python3-protobuf unbound conntrack nftables iproute2 iputils-ping kmod
+python3 -c "import dns, google.protobuf; print(dns.__version__, google.protobuf.__version__)"
+unbound -V
+sudo systemctl disable --now unbound
 systemctl is-active NetworkManager
 ip -br -4 addr
 nmcli -f NAME,DEVICE connection show --active
@@ -36,7 +38,9 @@ nmcli -f NAME,DEVICE connection show --active
 
 If the machine does not use NetworkManager, configure it using the appropriate procedure for that OS, or install a supported OS. Do not automatically replace the current network manager over an existing SSH connection.
 
-**Dependency on the RabbitWall host:** dnspython must be at least 2.6.1 and below version 3. If the installed version is older, update it using official packages for a supported OS. No separate DNS installation command is needed.
+**DNS components on the RabbitWall host:** Unbound forwards DNS; a separate dnstap receiver provides domain evidence. Unbound must be built with dnstap support: confirm that `unbound -V` above includes `--enable-dnstap`. Setup also checks this capability.
+
+The command above stops and disables the package's default `unbound.service`. RabbitWall uses its dedicated `rabbitwall-dns.service`; automatic integration with an Unbound instance serving other purposes is not supported. Observation requires dnspython >=2.6.1,<3 and the OS `python3-protobuf` package. No extra DNS installer is needed.
 
 ## 2. [RabbitWall host] Create the configuration
 
@@ -81,7 +85,7 @@ sudo python3 setup.py check
 cat output/install-plan/PLAN.txt
 ```
 
-Generated files include nftables, NetworkManager and kernel settings. `plan` does not change the OS and refuses to overwrite existing output. After changing the configuration, generate another plan with `--output output/another-plan`. `check` checks required packages, NICs, NetworkManager, conflicting services and ports.
+Generated files include nftables, NetworkManager, kernel settings and Unbound configuration (`unbound.conf`). `plan` does not change the OS and refuses to overwrite existing output. After changing the configuration, generate another plan with `--output output/another-plan`. `check` checks required packages, NICs, NetworkManager, conflicting services and ports.
 
 Review `nftables.conf` and `*.nmconnection`, then run the following **from a local console on the RabbitWall machine**.
 
@@ -93,7 +97,7 @@ sudo python3 setup.py install --plan output/install-plan --apply-network
 
 This replaces the firewall with dedicated rules, enables IP forwarding and connection-tracking byte accounting, and installs static IP profiles with IPv6 disabled. The AI-side profile keeps its IP address even without carrier. If existing profiles automatically connect on either NIC, inspect `nmcli connection show` and disable `connection.autoconnect` on unwanted profiles so that an old profile does not return after reboot.
 
-Configuration is stored in `/etc/rabbitwall.json`, code in `/opt/rabbitwall`, and history in `/var/lib/rabbitwall`. Original files and firewall rules are backed up under `/var/backups/rabbitwall/TIMESTAMP/`. If RabbitWall is already installed, use the update procedure below.
+Configuration is stored in `/etc/rabbitwall.json`, generated Unbound configuration in `/etc/rabbitwall-unbound.conf`, code in `/opt/rabbitwall`, and history in `/var/lib/rabbitwall`. Original files and firewall rules are backed up under `/var/backups/rabbitwall/TIMESTAMP/`. If RabbitWall is already installed, use the update procedure below.
 
 ## 4. Set up mTLS for the management PC
 
@@ -193,7 +197,27 @@ curl -I --connect-timeout 5 https://example.com
 
 Return to the management PC's browser and set the gate to **閉 (closed)**. Repeat the connectivity checks on the AI host and confirm that DNS and outbound traffic stop. Also confirm from the management PC that SSH to the RabbitWall host remains available. Short connections may finish between collection intervals of about five seconds and go unobserved. Inferred domains match positive DNS answers for the same client against destination IPs; they do not establish the HTTPS hostname. Traffic rankings accumulate observed counter differences after installation and omit bytes transferred before the first observation or during collection gaps.
 
-### 5.3 [Management PC / upstream router] Add an SSH route to AI hosts (optional)
+### 5.3 [RabbitWall host → AI host] Verify DNS and observer independence
+
+**Run on: RabbitWall host terminal**
+
+```sh
+systemctl is-active rabbitwall-dns rabbitwall-dns-observer
+sudo unbound-checkconf /etc/rabbitwall-unbound.conf
+sudo systemctl stop rabbitwall-dns-observer
+```
+
+With the gate open in the management PC's console, repeat the DNS checks from step 5.2 on the AI host. Unbound continues resolving while the observer is stopped. New DNS responses during this gap do not update domain hints. Restart observation after the check.
+
+**Run on: RabbitWall host terminal**
+
+```sh
+sudo systemctl start rabbitwall-dns-observer
+```
+
+Resolve again from the AI host and check inferred domains for new sessions in the management PC's console. Unbound cache responses are also observed. Then close the gate from the management PC and repeat UDP/TCP DNS checks on the AI host; cached names must also be blocked.
+
+### 5.4 [Management PC / upstream router] Add an SSH route to AI hosts (optional)
 
 Even in NAT mode, the management PC needs a route to reach the AI subnet. In this example, add `192.168.20.0/24 → 192.168.10.2` on the management PC, or add that route on the upstream router. A temporary check on a Linux management PC:
 
@@ -204,6 +228,20 @@ sudo ip route add 192.168.20.0/24 via 192.168.10.2
 ```
 
 Make the route persistent using your management PC's OS configuration. The generated firewall allows SSH and Ping from the configured management PC to monitored AI hosts. This additional route is not needed just to access the console.
+
+## 6. [RabbitWall host] Download IP-country data (optional)
+
+To enable country labels, download DB-IP Country Lite after installation. **Setup does not download it automatically.** The console works without it, but cannot display countries for public IP addresses.
+
+**Run on: RabbitWall host terminal**
+
+```sh
+sudo python3 /opt/rabbitwall/update_geoip.py
+```
+
+This downloads the current month's data, converts it into a local IP-country database, and saves it to `/var/lib/rabbitwall/geoip-country.sqlite3`. The RabbitWall host itself needs Internet access. The AI network's Internet gate can remain closed during this operation.
+
+Afterward, reload the console in the management PC's browser and check the database status and edition under **設 — Settings**. Use the same command for later updates. No automatic update schedule is configured. See the [daily operation guide](OPERATIONS.md) for data attribution, licensing and operational notes.
 
 ## Updates [RabbitWall host → management PC]
 
@@ -217,7 +255,33 @@ sudo python3 setup.py update
 
 This updates the application, DNS and service definitions together while preserving configuration, NAT and mTLS. **The gate is closed immediately after an update.** After the command finishes, return to the management PC's browser, force-reload it, verify the displayed state, and then reopen the gate if appropriate.
 
-Changing IP addresses or NICs is a separate network change. From a local console, review routing, firewall rules, NetworkManager and Caddy certificates together. Avoid editing only the live JSON configuration and restarting services.
+## Correcting IP addresses and reapplying configuration [RabbitWall host local console]
+
+`init` creates an input file; it does not change an installed system. `update` uses `/etc/rabbitwall.json` and does not reconfigure NICs or the baseline firewall. To correct an installation or change network settings, edit `rabbitwall.json` in the source directory, including node addresses, interfaces, management PC address, gateway, DNS and NAT as appropriate. Then run:
+
+**Run on: RabbitWall host local console, in the source directory**
+
+```sh
+sudo python3 setup.py reconfigure --config rabbitwall.json --apply-network
+sudo python3 setup.py doctor
+```
+
+Do not run the network change over SSH: changing the addresses or firewall can disconnect it. The command validates the input, Unbound configuration and firewall, then backs up the existing configuration and runtime firewall. It applies both NetworkManager profiles, routing settings, firewall, NAT and DNS, saves `/etc/rabbitwall.json`, and deploys the application and services. A separate `update` is unnecessary. The gate finishes **closed**. Check management access and DNS before reopening it.
+
+Existing mTLS certificates, keys, operation key and history are retained. Caddy's bind address, management PC restriction and HTTPS firewall rule are regenerated when mTLS is installed. A changed console hostname requires a matching server certificate; an incompatible certificate is rejected before network changes. If the uplink IP changes, update the management PC's hosts/DNS entry for the console hostname; AI hosts also need their gateway/DNS settings adjusted if the AI-side address changes. Upstream static routes must match the new subnets when NAT is disabled.
+
+Previously active connection profiles on the two target NICs have automatic connection disabled; the generated `rabbitwall-uplink` and `rabbitwall-ai` profiles are activated by UUID to avoid ambiguous names. This is not a migration tool for moving to different physical NICs; disconnect or retire unused NIC profiles separately.
+
+The backup location and `restore.sh` path are printed **before** application. After services stop, a failure leaves the gate closed; fix the cause locally and rerun the same command. To restore the saved network configuration instead:
+
+**Run on: RabbitWall host local console; replace TIMESTAMP with the printed backup directory**
+
+```sh
+sudo sh /var/backups/rabbitwall/TIMESTAMP/restore.sh
+sudo reboot
+```
+
+Restore returns to the saved configuration, which may itself contain the original mistake. Keep the backup private. Full service operation, NetworkManager activation and reboot behavior should be checked on the actual host after reconfiguration.
 
 ## Troubleshooting and recovery [RabbitWall host]
 
@@ -225,12 +289,14 @@ Changing IP addresses or NICs is a separate network change. From a local console
 
 ```sh
 sudo python3 setup.py doctor
-sudo journalctl -u rabbitwall-control -u rabbitwall-dns -u rabbitwall-collector -u rabbitwall-caddy -n 60 --no-pager
+sudo journalctl -u rabbitwall-control -u rabbitwall-dns -u rabbitwall-dns-observer -u rabbitwall-collector -u rabbitwall-caddy -n 60 --no-pager
 ```
 
 - Missing DNS listen address: check the AI-side profile, NIC name and NetworkManager carrier settings.
 - Missing byte counters: check that `sysctl net.netfilter.nf_conntrack_acct` is 1. Accounting applies to new connections established after enabling it.
-- DNS returns SERVFAIL: check upstream DNS access rules and routing. Timeouts while the gate is closed are expected.
+- DNS returns SERVFAIL: check Unbound logs, upstream DNS access rules and routing. Timeouts while the gate is closed are expected.
+- Unbound exits with `getifaddrs: Address family not supported by protocol`: check `systemctl cat rabbitwall-dns`. Its `RestrictAddressFamilies` must permit `AF_NETLINK` as well as `AF_INET` and `AF_UNIX`; Linux interface enumeration uses Netlink. Apply the current service definition with `setup.py update`, then check DNS again with the gate open.
+- DNS works but no new domain hints appear: check the observer service/logs, `/run/rabbitwall-dns/dnstap.sock` and observation JSON updates. Buffered events may arrive late, but dropped events cannot be recovered; query again from the client after observation resumes.
 - mTLS connection fails: check the management PC's IP, hosts entry, CA trust, client certificate and expiry, and Caddy version.
 
 To undo the initial installation, run the displayed backup's `restore.sh` **from a local console**. It stops services and restores the original firewall and saved settings. Reboot locally afterward to reactivate the original NIC profiles and kernel settings.
@@ -244,4 +310,4 @@ sudo reboot
 
 Recovery does not delete the history database or source. Separate mTLS installation backups are stored in `/etc/rabbitwall/backups`.
 
-Before a code update, application files are saved under the displayed `/var/backups/rabbitwall/application-TIMESTAMP/`. If an update fails, Internet access remains closed. Fix the cause from a local console and rerun `setup.py update`. To restore old code, stop all four services, restore the backup's `opt/rabbitwall/` and `etc/` to their original paths, run `systemctl daemon-reload`, and restart control, dns, collector and web in that order. Keep the new groups and directory permissions. This application backup does not contain the initial network recovery script.
+Before a code update, application files are saved under the displayed `/var/backups/rabbitwall/application-TIMESTAMP/`. If an update fails, Internet access remains closed. Fix the cause from a local console and rerun `setup.py update`. To restore old code, stop all five services (control, dns, dns-observer, collector and web), restore the backup's `opt/rabbitwall/` and `etc/` to their original paths, run `systemctl daemon-reload`, and restart control, dns, dns-observer, collector and web in that order. Keep the new groups and directory permissions. This application backup does not contain the initial network recovery script.

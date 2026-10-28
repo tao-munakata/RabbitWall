@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT/'src/rabbitwall'))
 sys.path.insert(0, str(ROOT/'tools'))
 from dependencies import check_dns_version
 import console
-import dns_forwarder
+import dnstap_observer
 import deploy
 
 
@@ -24,16 +24,6 @@ class Hardening(unittest.TestCase):
                 check_dns_version(version)
         for version in ('2.6.1', '2.7.0', '2.8.0'):
             check_dns_version(version)
-
-    def test_slow_dns_tcp_has_absolute_deadline(self):
-        handler = object.__new__(dns_forwarder.TCPHandler)
-        handler.deadline = 10
-        handler.request = Mock()
-        handler.request.recv.return_value = b'x'
-        with patch.object(dns_forwarder.time, 'monotonic', side_effect=[9, 11]):
-            with self.assertRaises(TimeoutError):
-                handler.read_exact(2)
-        self.assertEqual(handler.request.recv.call_count, 1)
 
     def test_http_saturation_closes_socket_without_starting_more_threads(self):
         with console.ConsoleServer(('127.0.0.1', 0), console.make_handler(Path('/unused'), 8765, demo=True)) as server:
@@ -56,13 +46,13 @@ class Hardening(unittest.TestCase):
     def test_deployment_contains_all_runtime_modules_and_units(self):
         files = deploy.deployment_files()
         self.assertIn(Path('/opt/rabbitwall/dependencies.py'), files)
-        self.assertIn(Path('/opt/rabbitwall/dns_forwarder.py'), files)
+        self.assertIn(Path('/opt/rabbitwall/dnstap_observer.py'), files)
         self.assertIn(Path('/etc/systemd/system/rabbitwall-collector.service.d/dns.conf'), files)
         self.assertNotIn(Path('/etc/rabbitwall.json'), files)
         self.assertNotIn(Path('/etc/systemd/system/rabbitwall-caddy.service'), files)
         self.assertFalse(any('test' in p.parts or '__pycache__' in p.parts for p in files.values()))
 
     def test_dependency_failure_prevents_gate_or_file_changes(self):
-        with patch('dependencies.require_dns', side_effect=ValueError('outdated')), patch.object(deploy.os, 'geteuid', return_value=0), patch.object(deploy, 'close_installed') as close:
+        with patch('dependencies.require_observer', side_effect=ValueError('outdated')), patch.object(deploy.os, 'geteuid', return_value=0), patch.object(deploy, 'close_installed') as close:
             with self.assertRaises(ValueError): deploy.deploy({})
             close.assert_not_called()

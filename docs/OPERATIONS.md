@@ -21,11 +21,15 @@ Closing blocks AI outbound traffic, in-flight traffic and its replies, and DNS r
 
 ## DNS and inferred domains
 
-Configure AI hosts to use the host IP from `ai_cidr` as both gateway and DNS server. RabbitWall queries `dns_upstream` over UDP/TCP port 53. Direct port-53 traffic from AI hosts to upstream or external DNS servers is rejected.
+Configure AI hosts to use the host IP from `ai_cidr` as both gateway and DNS server. Unbound (`rabbitwall-dns.service`) queries `dns_upstream` over UDP/TCP port 53 and caches answers. Direct port-53 traffic from AI hosts to upstream or external DNS servers is rejected.
 
-Positive A/AAAA answers received by the same client are matched against destination IPs and shown as inferred domains. For CNAME chains, the original queried name is displayed and the shortest TTL along the chain is used, capped at one hour. If several names share an IP, all candidates are shown. This does not establish the HTTPS hostname or URL. DoH, locally cached answers and connections to literal IP addresses may not produce a match.
+The independent `rabbitwall-dns-observer.service` receives Unbound client-response events through a dnstap Unix socket. Positive A/AAAA answers for the same client are matched against destination IPs and shown as inferred domains. For CNAME chains, the original queried name is displayed and the shortest TTL along the chain is used, capped at one hour. If several names share an IP, all candidates are shown. This does not establish the HTTPS hostname or URL. Unbound cache responses are matched using their remaining TTL. DoH, answers cached only on the client, and connections to literal IP addresses may not produce a match.
 
 Up to 10,000 observations are stored in `/run/rabbitwall-dns/observations.json`, a temporary file in memory-backed storage that disappears on reboot. DNS packets and per-query disk logs are not stored. Candidate names attached to a session are retained with that session's history.
+
+Unbound continues serving open-gate DNS when the observer stops or restarts. Slow observation can lose events; buffered events may arrive late, but dropped events cannot be recovered. Existing session hints remain in history, while new hints require DNS responses after observation resumes. The closed gate blocks DNS in the kernel independently of the observer, including Unbound cache responses.
+
+Only the configured upstream DNS is used; failure does not fall back to direct recursive resolution. This configuration does not enable local DNSSEC validation or encryption of upstream DNS.
 
 ## Newly observed domains
 
@@ -61,8 +65,10 @@ IP-country lookups are performed locally; destination IPs are not sent to an ext
 
 ```sh
 sudo python3 setup.py doctor
-sudo journalctl -u rabbitwall-control -u rabbitwall-dns -u rabbitwall-collector -u rabbitwall-caddy -n 60 --no-pager
+sudo journalctl -u rabbitwall-control -u rabbitwall-dns -u rabbitwall-dns-observer -u rabbitwall-collector -u rabbitwall-caddy -n 60 --no-pager
 sudo nft list table inet rabbitwall_console
 ```
 
 To back up the database, use SQLite's backup facility or stop the collector before copying it. Do not put backups containing configuration, certificates or traffic history in a public repository. See the [installation guide](INSTALL.md) for certificate registration, renewal and installation recovery.
+
+For IP, NIC, gateway, NAT or DNS configuration corrections, use `setup.py reconfigure --config rabbitwall.json --apply-network` from the RabbitWall host local console. It also updates the application; `update` alone does not apply network changes. See [correcting and reapplying configuration](INSTALL.md#correcting-ip-addresses-and-reapplying-configuration-rabbitwall-host-local-console).

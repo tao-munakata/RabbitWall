@@ -5,6 +5,7 @@ RabbitWall is for a dedicated Linux gateway on a trusted management network. It 
 - The backend listens on loopback. Caddy requires a trusted, explicitly permitted client certificate and the configured management-PC source IP.
 - The Internet gate starts closed. Its kernel permission expires after 20 seconds unless renewed by the controller. Closing also blocks established AI-originated connections and AI DNS input/relay/replies. Management SSH and gateway-originated updates remain available.
 - The baseline permits public IPv4 HTTP/HTTPS and NTP. HTTPS includes potential DoH, tunnels and data upload. Domain hints and country estimates are observations, not enforcement of application identity. IPv6 and alternate network paths need attention on the AI hosts too.
+- DNS forwarding uses Unbound with the configured upstream only; local DNSSEC validation and upstream encryption are not enabled. The separate dnstap observer receives a bounded local stream. Observer failure can lose domain evidence but does not stop DNS or bypass the kernel gate.
 - DNS first-seen information, session history and traffic aggregates reveal network activity. Keep the host, backups and generated reports private. The original CA key and client private key stay on the management PC.
 - Installing replaces this dedicated host's nftables ruleset. UFW/firewalld/Docker, hardware flow offload, custom routing and other network managers are outside automatic integration. Use a local recovery console and review the generated plan.
 

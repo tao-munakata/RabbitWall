@@ -44,6 +44,8 @@ flowchart LR
 - 開閉の対象は**AI側のインターネット接続**です。管理PCの通常通信は、既存LANから上流ルーターへ流れます。
 - 上流側とAI側は別のサブネットにします。標準のNAT方式では、AI側の通信はRabbitWallの上流側IPから送信されます。
 
+DNS転送はUnbound、推定ドメインの収集は独立したdnstap観測サービスが担当します。観測停止中もDNSは継続し、「閉」ではキャッシュ応答も遮断します。
+
 ## まず画面を試す
 
 Python 3.11以上で、OS設定を変えずにデモを起動できます。macOSでも動作します。
@@ -78,6 +80,7 @@ sudo python3 setup.py install --apply-network
 - [設定・更新・復旧](docs/INSTALL.ja.md)
 - [日常運用・DNS・通信量の見方](docs/OPERATIONS.ja.md)
 - [セキュリティ上の範囲と報告方法](SECURITY.md)
+- [プログラムのフロー・関数と依存先の関係](docs/PROGRAM_FLOW.ja.md)
 - [開発と試験](CONTRIBUTING.md)
 
 本体はMITライセンス。地図データ等の第三者資材については [THIRD_PARTY.md](src/rabbitwall/static/THIRD_PARTY.md) を参照してください。国別IPデータは任意の追加導入です。

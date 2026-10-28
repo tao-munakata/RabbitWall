@@ -14,3 +14,12 @@ def require_dns():
     except ImportError as error:
         raise ValueError('Install python3-dnspython >=2.6.1,<3') from error
     check_dns_version(dns.__version__)
+
+
+def require_observer():
+    require_dns()
+    try:
+        import google.protobuf
+        import dnstap_pb2
+    except ImportError as error:
+        raise ValueError('Install python3-protobuf for the dnstap observer') from error

@@ -21,11 +21,15 @@
 
 ## DNSと推定ドメイン
 
-AI端末は `ai_cidr` のホストIPをDNSとゲートウェイに設定する。RabbitWallは `dns_upstream` へUDP/TCP53で問い合わせる。AI端末から上流や外部DNSへの直接の53番通信は拒否する。
+AI端末は `ai_cidr` のホストIPをDNSとゲートウェイに設定する。Unbound（`rabbitwall-dns.service`）が `dns_upstream` へUDP/TCP53で問い合わせ、結果をキャッシュする。AI端末から上流や外部DNSへの直接の53番通信は拒否する。
 
-同じ端末が受け取ったA/AAAAの正の応答と通信先IPを照合し、「推定ドメイン」として表示する。CNAMEは問い合わせた元の名前を表示し、有効期限には経路中の短いTTLを使う（上限1時間）。共有IPに複数の名前が対応する場合は候補を併記する。HTTPSのホスト名やURLを確定する機能ではない。DoH、キャッシュだけを使う通信、IP直指定などは照合できないことがある。
+独立した `rabbitwall-dns-observer.service` がUnboundの端末向け応答をdnstapのUnixソケットから受信する。同じ端末へのA/AAAAの正の応答と通信先IPを照合し、「推定ドメイン」として表示する。CNAMEは問い合わせた元の名前を表示し、有効期限には経路中の短いTTLを使う（上限1時間）。共有IPに複数の名前が対応する場合は候補を併記する。HTTPSのホスト名やURLを確定する機能ではない。Unboundのキャッシュ応答も残りTTLで照合する。DoH、端末自身のキャッシュだけを使う通信、IP直指定などは照合できないことがある。
 
 観測情報は `/run/rabbitwall-dns/observations.json` に最大1万件、メモリ上の一時ファイルとして保存する。再起動で消える。DNSパケットや問い合わせごとのディスクログは保存しない。セッションに付いた候補名は、そのセッション履歴と一緒に保存する。
+
+観測サービスが停止・再起動してもUnboundは継続し、開状態のDNSは利用できる。観測が遅れる場合はイベントが欠落することがある。停止中のイベントの一部はバッファから遅れて届くが、欠落したイベントは復元できない。既存セッションの候補は履歴に残るが、新しい候補は観測再開後のDNS応答から追加する。「閉」のDNS遮断は観測サービスに依存せず、Unboundのキャッシュ応答も含めてカーネルで行う。
+
+上流は設定されたDNSだけを使用し、失敗時に直接再帰問い合わせへ切り替えない。現構成ではUnbound自身のDNSSEC検証・上流DNSの暗号化は有効にしない。
 
 ## 初めてのドメイン
 
@@ -61,8 +65,10 @@ IPと国の照合はローカルで行い、通信先IPを外部へ送信しな�
 
 ```sh
 sudo python3 setup.py doctor
-sudo journalctl -u rabbitwall-control -u rabbitwall-dns -u rabbitwall-collector -u rabbitwall-caddy -n 60 --no-pager
+sudo journalctl -u rabbitwall-control -u rabbitwall-dns -u rabbitwall-dns-observer -u rabbitwall-collector -u rabbitwall-caddy -n 60 --no-pager
 sudo nft list table inet rabbitwall_console
 ```
 
 DBをバックアップする場合はSQLiteのバックアップ機能を使うか、collectorを停止してからコピーする。設定・証明書・通信履歴を含むバックアップは公開リポジトリへ入れない。証明書の登録・更新と導入時の復旧は [導入ガイド](INSTALL.ja.md) を参照。
+
+IP・IF・ゲートウェイ・NAT・DNS設定の訂正は、RabbitWall導入先PCのローカルコンソールで `setup.py reconfigure --config rabbitwall.json --apply-network` を使います。アプリ更新も含み、`update` だけではネットワーク設定は反映されません。[導入ガイド](INSTALL.ja.md) の「IP設定の訂正と再適用」を参照してください。

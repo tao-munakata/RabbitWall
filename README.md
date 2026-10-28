@@ -44,6 +44,8 @@ flowchart LR
 - The switch controls **Internet access for the AI network**. The management PC's ordinary traffic goes directly through the existing LAN to the upstream router.
 - Use separate subnets for the upstream and AI interfaces. With the default NAT mode, AI traffic leaves through RabbitWall's upstream IP address.
 
+DNS forwarding uses Unbound; a separate dnstap observer supplies inferred domains. Observer downtime does not stop DNS, and closing the gate blocks cached DNS answers too.
+
 ## Try the demo
 
 Run the demo with Python 3.11 or later without changing your operating system settings. It also runs on macOS.
@@ -78,6 +80,7 @@ NAT is the default, so Internet access does not require an additional static rou
 - [Configuration, updates, and recovery](docs/INSTALL.md)
 - [Daily operation, DNS, and traffic statistics](docs/OPERATIONS.md)
 - [Security boundaries and reporting](SECURITY.md)
+- [Program flow and dependency interactions](docs/PROGRAM_FLOW.md)
 - [Development and testing](CONTRIBUTING.md)
 
 RabbitWall is released under the [MIT License](LICENSE). See [THIRD_PARTY.md](src/rabbitwall/static/THIRD_PARTY.md) for map data and other third-party assets. Country-IP data is an optional download.

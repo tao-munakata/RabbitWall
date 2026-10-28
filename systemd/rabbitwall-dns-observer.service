@@ -1,0 +1,32 @@
+[Unit]
+Description=RabbitWall dnstap domain observer
+After=network.target
+
+[Service]
+Type=simple
+User=rabbitwall-dns
+Group=rabbitwall-dns
+RuntimeDirectory=rabbitwall-dns
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/bin/python3 -B /opt/rabbitwall/dnstap_observer.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/run/rabbitwall-dns
+UMask=0027
+MemoryMax=96M
+TasksMax=8
+LimitNOFILE=64
+
+[Install]
+WantedBy=multi-user.target

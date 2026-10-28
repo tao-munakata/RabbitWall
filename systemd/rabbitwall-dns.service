@@ -1,5 +1,5 @@
 [Unit]
-Description=RabbitWall AI DNS forwarder and domain observations
+Description=RabbitWall Unbound DNS forwarder
 After=network-online.target nftables.service rabbitwall-control.service
 Wants=network-online.target
 Requires=rabbitwall-control.service
@@ -10,7 +10,8 @@ User=rabbitwall-dns
 Group=rabbitwall-dns
 RuntimeDirectory=rabbitwall-dns
 RuntimeDirectoryMode=0750
-ExecStart=/usr/bin/python3 -B /opt/rabbitwall/dns_forwarder.py
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/sbin/unbound -d -c /etc/rabbitwall-unbound.conf
 Restart=on-failure
 RestartSec=3
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -22,12 +23,12 @@ ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_UNIX
-ReadWritePaths=/run/rabbitwall-dns
+# getifaddrs() enumerates interfaces through NETLINK_ROUTE on Linux.
+RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK
 UMask=0027
-MemoryMax=128M
+MemoryMax=192M
 TasksMax=64
-LimitNOFILE=256
+LimitNOFILE=1024
 
 [Install]
 WantedBy=multi-user.target

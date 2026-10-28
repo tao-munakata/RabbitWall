@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVICES = ('rabbitwall-control', 'rabbitwall-dns', 'rabbitwall-collector', 'rabbitwall-web')
+SERVICES = ('rabbitwall-control', 'rabbitwall-dns', 'rabbitwall-dns-observer', 'rabbitwall-collector', 'rabbitwall-web')
 
 
 def run(*args):
@@ -38,8 +38,12 @@ def deploy(config):
     if os.geteuid() != 0:
         raise ValueError('Run setup.py install/update as root')
     sys.path.insert(0, str(ROOT/'src/rabbitwall'))
-    from dependencies import require_dns
-    require_dns()
+    from dependencies import require_observer
+    from unbound_config import render, check_config, require_unbound, CONFIG_PATH
+    require_observer()
+    require_unbound()
+    unbound_text = render(config)
+    check_config(unbound_text)
     targets = deployment_files()
     # Validate the entire source set before closing services.
     for source in targets.values():
@@ -65,7 +69,7 @@ def deploy(config):
             raise ValueError(f'DNS cannot bind {address}:53: {error}. Gate remains closed; inspect ip -br -4 addr and sudo ss -luntp.') from error
     backup = Path('/var/backups/rabbitwall') / ('application-' + dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
     backup.mkdir(parents=True, mode=0o700)
-    saved = list(targets) + [Path('/etc/nftables.conf'), Path('/etc/nftables.d/rabbitwall.nft')]
+    saved = list(targets) + [CONFIG_PATH, Path('/etc/nftables.conf'), Path('/etc/nftables.d/rabbitwall.nft')]
     for target in saved:
         if target.is_file():
             destination = backup / str(target).lstrip('/')
@@ -87,6 +91,8 @@ def deploy(config):
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
         shutil.copyfile(source, target)
         target.chmod(0o644)
+    CONFIG_PATH.write_text(unbound_text)
+    CONFIG_PATH.chmod(0o644)
     run('/usr/bin/python3', '-B', '/opt/rabbitwall/control.py', 'install')
     run('systemctl', 'daemon-reload')
     run('systemctl', 'enable', *SERVICES)

@@ -27,8 +27,10 @@
 
 ```sh
 sudo apt update
-sudo apt install python3 python3-dnspython conntrack nftables iproute2 iputils-ping kmod
-python3 -c "import dns; print(dns.__version__)"
+sudo apt install python3 python3-dnspython python3-protobuf unbound conntrack nftables iproute2 iputils-ping kmod
+python3 -c "import dns, google.protobuf; print(dns.__version__, google.protobuf.__version__)"
+unbound -V
+sudo systemctl disable --now unbound
 systemctl is-active NetworkManager
 ip -br -4 addr
 nmcli -f NAME,DEVICE connection show --active
@@ -36,7 +38,9 @@ nmcli -f NAME,DEVICE connection show --active
 
 NetworkManagerを使用していない機器では、OSに合った方法でNetworkManagerを設定するか、対応するOSをインストールする。既存SSH接続上でネットワーク管理方式を自動的に切り替えることはしない。
 
-**RabbitWall導入先PCの依存ライブラリー**：dnspythonは2.6.1以上・3未満が必要です。古い版の場合は対応OSの公式パッケージを更新してください。DNS用の個別インストール操作は不要です。
+**RabbitWall導入先PCのDNS構成**：DNS転送はUnbound、推定ドメイン用の観測は独立したdnstap受信プロセスが担当します。Unboundはdnstap対応ビルドが必要です。上の `unbound -V` に `--enable-dnstap` が含まれることを確認してください。setupの検査でも対応状況を確認します。
+
+公式パッケージの標準 `unbound.service` は上のコマンドで停止・無効化します。RabbitWallは専用の `rabbitwall-dns.service` を使います。他用途のUnboundとの自動統合は対象外です。観測用のdnspythonは2.6.1以上・3未満、Protocol BuffersはOSの `python3-protobuf` が必要です。DNSの追加インストーラーを実行する必要はありません。
 
 ## 2. 【RabbitWall導入先PC】設定を作る
 
@@ -81,7 +85,7 @@ sudo python3 setup.py check
 cat output/install-plan/PLAN.txt
 ```
 
-生成物にはnftables・NetworkManager・カーネル設定が含まれる。`plan` はOSを変更しない。既存出力を上書きせず、設定を直したときは `--output output/別の名前` で再生成する。`check` は不足パッケージ、NIC、NetworkManager、競合サービスやポートを確認する。
+生成物にはnftables・NetworkManager・カーネル設定・Unbound設定（`unbound.conf`）が含まれる。`plan` はOSを変更しない。既存出力を上書きせず、設定を直したときは `--output output/別の名前` で再生成する。`check` は不足パッケージ、NIC、NetworkManager、競合サービスやポートを確認する。
 
 `nftables.conf` と `*.nmconnection` を確認後、**RabbitWallを導入するマシンのローカルコンソール**で実行する。
 
@@ -93,7 +97,7 @@ sudo python3 setup.py install --plan output/install-plan --apply-network
 
 この処理はFWを専用ルールへ置換し、IP転送・接続追跡のバイト計測を有効にし、IPv6を無効化した固定IPプロファイルを導入する。AI側はキャリアがなくてもIPを維持する設定にする。上流やAI側に既存の自動接続プロファイルがある場合は、再起動時に古いプロファイルへ戻らないよう `nmcli connection show` で確認し、不要な接続の `connection.autoconnect` を無効にする。
 
-設定は `/etc/rabbitwall.json`、コードは `/opt/rabbitwall`、履歴は `/var/lib/rabbitwall` に置く。変更前のファイルとFWは `/var/backups/rabbitwall/日時/` へ保存する。RabbitWallが導入済みの場合は、下記の更新手順を使う。
+設定は `/etc/rabbitwall.json`、生成したUnbound設定は `/etc/rabbitwall-unbound.conf`、コードは `/opt/rabbitwall`、履歴は `/var/lib/rabbitwall` に置く。変更前のファイルとFWは `/var/backups/rabbitwall/日時/` へ保存する。RabbitWallが導入済みの場合は、下記の更新手順を使う。
 
 ## 4. 管理PC用mTLSを設定する
 
@@ -193,7 +197,27 @@ curl -I --connect-timeout 5 https://example.com
 
 管理PCのブラウザーで「閉」に戻し、AI端末で同じ通信確認を再実行してDNS・外向き通信が止まることを確認する。管理PCから導入先PCへのSSHが維持されることも確認する。宛先不明の短い通信は約5秒の収集から漏れる。推定ドメインは同一端末の正のDNS応答とIPの照合であり、HTTPSホスト名の確定結果ではない。通信量ランキングは導入後の差分を蓄積し、最初の観測までの値や収集停止中の増分を含まない。
 
-### 5.3 【管理PC／上流ルーター】AI端末へのSSH経路を追加する（任意）
+### 5.3 【RabbitWall導入先PC → AI端末】DNSと観測の独立動作を確認する
+
+**実行場所：RabbitWall導入先PCのターミナル**
+
+```sh
+systemctl is-active rabbitwall-dns rabbitwall-dns-observer
+sudo unbound-checkconf /etc/rabbitwall-unbound.conf
+sudo systemctl stop rabbitwall-dns-observer
+```
+
+管理PCのコンソールで対外接続を「開」にした状態で、AI端末から5.2のDNS確認を再実行します。観測サービスを停止しても、Unboundの名前解決は継続します。停止中の新しいDNS応答は推定ドメインへ反映されません。確認後は観測を再開します。
+
+**実行場所：RabbitWall導入先PCのターミナル**
+
+```sh
+sudo systemctl start rabbitwall-dns-observer
+```
+
+AI端末から再度名前解決し、管理PCのコンソールで新しいセッションの推定ドメインを確認してください。Unboundのキャッシュからの応答も観測対象です。次に管理PCで「閉」にし、AI端末からUDP・TCPのDNS確認を繰り返して、キャッシュ済みの名前でも遮断されることを確認します。
+
+### 5.4 【管理PC／上流ルーター】AI端末へのSSH経路を追加する（任意）
 
 NAT方式でも、管理PCがAI側サブネットへ到達するには経路が必要。例では管理PCに `192.168.20.0/24 → 192.168.10.2` を設定するか、上流ルーターに同じ経路を追加する。Linuxの管理PCでの一時的な確認例：
 
@@ -204,6 +228,20 @@ sudo ip route add 192.168.20.0/24 via 192.168.10.2
 ```
 
 永続化は管理PCのOSに従う。生成FWは指定管理PCから監視対象のAI端末へのSSH・Pingを許可する。コンソール自体へのアクセスだけなら、この追加経路は不要。
+
+## 6. 【RabbitWall導入先PC】国別IPデータを取得する（任意）
+
+国表示を利用する場合は、導入完了後にDB-IP Country Liteを取得します。**セットアップでは自動取得しません。** 未導入でもコンソールは動作しますが、公開IPの国は表示できません。
+
+**実行場所：RabbitWall導入先PCのターミナル**
+
+```sh
+sudo python3 /opt/rabbitwall/update_geoip.py
+```
+
+当月のデータをダウンロードし、ローカルの国別IPデータベースへ変換して `/var/lib/rabbitwall/geoip-country.sqlite3` に保存します。導入先PC自身がインターネットへ接続できる必要があります。AI側の対外接続は「閉」のまま実行できます。
+
+完了後、管理PCのブラウザーでコンソールを再読み込みし、「設」で国別IPデータの状態と版を確認してください。更新時も同じコマンドを使います。自動定期更新は設定されません。データの出典・ライセンスと運用上の注意は、[日常運用ガイド](OPERATIONS.ja.md)を参照してください。
 
 ## 更新【RabbitWall導入先PC → 管理PC】
 
@@ -217,7 +255,33 @@ sudo python3 setup.py update
 
 設定・NAT・mTLSを維持して、アプリ本体・DNS・サービス定義をまとめて更新する。**更新直後は「閉」**。更新コマンドが完了したら、管理PCのブラウザーへ戻って強制再読み込みし、状態確認後に開く。
 
-IPやNICを変更する場合は通常のコード更新とは別のネットワーク変更である。ローカルコンソールでルーティング・FW・NetworkManager・Caddyの証明書をまとめて見直す。稼働中のJSONだけを編集して再起動することは避ける。
+## IP設定の訂正と再適用【RabbitWall導入先PCのローカルコンソール】
+
+`init` は入力ファイルを作るだけで、導入済み環境には反映しません。`update` は `/etc/rabbitwall.json` を使い、NICと基本Firewallを変更しません。インストール時の誤りやネットワーク設定を変更する場合は、ソースディレクトリの `rabbitwall.json` を修正してください。ノードのIP・IF、管理PCのIP、ゲートウェイ、DNS、NATも必要に応じて合わせます。
+
+**実行場所：RabbitWall導入先PCのローカルコンソール。ソースのルートディレクトリで実行**
+
+```sh
+sudo python3 setup.py reconfigure --config rabbitwall.json --apply-network
+sudo python3 setup.py doctor
+```
+
+IPやFirewall変更で切断されるため、SSH経由で実行しないでください。入力・Unbound設定・Firewallの検証後に、既存設定と稼働中のFirewallをバックアップします。NetworkManagerの2つの接続設定・ルーティング設定・Firewall・NAT・DNSを反映し、`/etc/rabbitwall.json` を保存してアプリとサービスも更新します。別途 `update` を実行する必要はありません。完了時の対外接続は **「閉」** です。管理接続とDNSを確認してから開いてください。
+
+mTLSの証明書・秘密鍵、操作キー、履歴は保持します。mTLS導入済みの場合、Caddyの待受IP・管理PCの制限・HTTPSのFirewallルールも再生成します。コンソールのホスト名を変更する場合は一致するサーバー証明書が必要で、不一致ならネットワーク変更前に停止します。上流側IPを変更した場合は管理PCのhosts／DNS登録を変更し、AI側IPを変更した場合はAI端末のゲートウェイとDNSも変更してください。NAT無効時は上流ルーターの静的経路も合わせます。
+
+対象NICで稼働中だった接続設定は自動接続を無効にし、生成した `rabbitwall-uplink` と `rabbitwall-ai` をUUID指定で有効化します。同名の接続設定が残っていても、名前の曖昧さを避けられます。別の物理NICへの移設用ツールではないため、使わなくなったNICの接続設定は別途無効化してください。
+
+適用前にバックアップ先と `restore.sh` のパスを表示します。サービス停止後に失敗した場合は「閉」を維持するので、ローカルで原因を修正し同じコマンドを再実行してください。保存したネットワーク設定へ戻す場合は：
+
+**実行場所：RabbitWall導入先PCのローカルコンソール。TIMESTAMPは表示されたバックアップ先に置換**
+
+```sh
+sudo sh /var/backups/rabbitwall/TIMESTAMP/restore.sh
+sudo reboot
+```
+
+復元先は保存時点の設定なので、元の誤りが含まれる場合があります。バックアップは非公開で保管してください。再適用後のサービス動作・NetworkManagerの接続切り替え・再起動時の挙動は実機で確認してください。
 
 ## 切り分けと復旧【RabbitWall導入先PC】
 
@@ -225,12 +289,14 @@ IPやNICを変更する場合は通常のコード更新とは別のネットワ
 
 ```sh
 sudo python3 setup.py doctor
-sudo journalctl -u rabbitwall-control -u rabbitwall-dns -u rabbitwall-collector -u rabbitwall-caddy -n 60 --no-pager
+sudo journalctl -u rabbitwall-control -u rabbitwall-dns -u rabbitwall-dns-observer -u rabbitwall-collector -u rabbitwall-caddy -n 60 --no-pager
 ```
 
 - DNS待受IPがない：AI側プロファイル、NIC名、NetworkManagerのキャリア設定を確認。
 - カウンターがない：`sysctl net.netfilter.nf_conntrack_acct` が1か確認。設定後の新規接続から有効。
-- DNSがSERVFAIL：上流のDNS受信制限と経路を確認。閉状態のタイムアウトは正常。
+- Unboundが `getifaddrs: Address family not supported by protocol` で停止：`systemctl cat rabbitwall-dns` を確認。LinuxのIF情報取得にはNetlinkが必要なため、`RestrictAddressFamilies` で `AF_INET AF_UNIX AF_NETLINK` を許可する。最新のサービス定義を `setup.py update` で適用し、対外接続を「開」にしてDNSを再確認する。
+- DNSがSERVFAIL：Unboundのログ、上流DNSの受信制限と経路を確認。閉状態のタイムアウトは正常。
+- 名前解決はできるが推定ドメインが増えない：`rabbitwall-dns-observer` の状態・ログ、`/run/rabbitwall-dns/dnstap.sock` と観測JSONの更新を確認。バッファ分が遅れて届くことはあるが欠落イベントは復元できないため、再開後に端末から名前解決をやり直す。
 - mTLS接続できない：管理PCのIP、hosts、CA信頼、クライアント証明書・期限、Caddyの版を確認。
 
 初回適用から戻す場合は、表示されたバックアップの `restore.sh` を **ローカルコンソール**で実行する。サービスを止め、元のFWと保存設定を戻す。元のNICプロファイルとカーネル設定を確実に再適用するため、復元後はローカルから再起動する。
@@ -244,4 +310,4 @@ sudo reboot
 
 履歴DBとソースは復旧時に削除しない。証明書導入後のmTLS個別バックアップは `/etc/rabbitwall/backups` にある。
 
-コード更新前の資材は、表示された `/var/backups/rabbitwall/application-日時/` に保存されます。更新に失敗した場合、対外接続は閉じたままです。ローカルコンソールから原因を直して `setup.py update` を再実行してください。旧コードに戻す場合は、4サービスを停止して当該バックアップの `opt/rabbitwall/` と `etc/` をそれぞれ元のパスへ戻し、`systemctl daemon-reload` 後にcontrol・dns・collector・webの順で再起動します。新たなグループとディレクトリ権限は維持してください。このアプリ用バックアップには初回ネットワーク設定の復元スクリプトは含みません。
+コード更新前の資材は、表示された `/var/backups/rabbitwall/application-日時/` に保存されます。更新に失敗した場合、対外接続は閉じたままです。ローカルコンソールから原因を直して `setup.py update` を再実行してください。旧コードに戻す場合は、5サービス（control・dns・dns-observer・collector・web）を停止して当該バックアップの `opt/rabbitwall/` と `etc/` をそれぞれ元のパスへ戻し、`systemctl daemon-reload` 後にcontrol・dns・dns-observer・collector・webの順で再起動します。新たなグループとディレクトリ権限は維持してください。このアプリ用バックアップには初回ネットワーク設定の復元スクリプトは含みません。
