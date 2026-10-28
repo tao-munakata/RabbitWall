@@ -58,7 +58,9 @@ Open `http://127.0.0.1:8766` in your browser. Both the displayed traffic and the
 
 ## Installation
 
-The target environment is **Debian 13 or Ubuntu 24.04, systemd, NetworkManager, and two wired network interfaces**. Application and firewall tests run in Linux containers with virtual networks. Verify hardware drivers and NetworkManager connection changes on the machine where you install RabbitWall.
+The target environment is **Debian 13 or later, or Ubuntu 24.04, with systemd, NetworkManager, and two wired network interfaces**. Application and firewall tests run in Linux containers with virtual networks. Verify hardware drivers and NetworkManager connection changes on the machine where you install RabbitWall.
+
+Debian 12 and earlier are not supported: their standard dnspython package does not meet the required version (>=2.6.1,<3). Use Debian 13 or later.
 
 1. Prepare the machine and dependencies using the [installation guide](docs/INSTALL.md).
 2. Create a configuration and generate an installation plan.

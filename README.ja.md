@@ -58,7 +58,9 @@ python3 setup.py demo
 
 ## 導入
 
-対象は **Debian 13 / Ubuntu 24.04系、systemd、NetworkManager、有線NIC 2つを備えたマシン**。アプリとFirewallの仮想ネットワーク試験はLinuxコンテナで実施しています。NICのドライバー・NetworkManagerによる実機の接続切り替えは導入先で確認してください。
+対象は **Debian 13以上 / Ubuntu 24.04系、systemd、NetworkManager、有線NIC 2つを備えたマシン**。アプリとFirewallの仮想ネットワーク試験はLinuxコンテナで実施しています。NICのドライバー・NetworkManagerによる実機の接続切り替えは導入先で確認してください。
+
+Debian 12以前は対象外です。標準のdnspythonが必要バージョン（2.6.1以上・3未満）を満たさないため、Debian 13以上を使用してください。
 
 1. [導入手順](docs/INSTALL.ja.md)に従い、依存パッケージとRabbitWallを導入するマシンを準備
 2. 設定を作り、適用計画を生成

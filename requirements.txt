@@ -1,3 +1,4 @@
+# Supported host OS: Debian 13 or later, or Ubuntu 24.04. Debian 12 and earlier are not supported.
 # Runtime DNS protocol library. On Debian/Ubuntu prefer apt install python3-dnspython.
 dnspython>=2.6.1,<3
 # dnstap decoding; on the gateway prefer the supported OS python3-protobuf package.

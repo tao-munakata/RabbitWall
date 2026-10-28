@@ -16,7 +16,8 @@ Each command block identifies its execution location. Unless stated otherwise, r
 ## 1. [RabbitWall host] Prepare the machine
 
 - Use a Linux machine with two wired NICs. arm64 and amd64 are the intended architectures. Check interface names with `ip -br link`.
-- Use Debian 13 or Ubuntu 24.04, Python 3.11 or later, and systemd. Both NICs must **already be managed by NetworkManager**. On derivatives such as Raspberry Pi OS, verify package, NIC and service differences on the actual machine.
+- Use Debian 13 or later, or Ubuntu 24.04, with Python 3.11 or later, and systemd. Both NICs must **already be managed by NetworkManager**. On derivatives such as Raspberry Pi OS, verify package, NIC and service differences on the actual machine.
+- **Debian 12 and earlier are not supported.** Their standard `python3-dnspython` package does not meet the required version (>=2.6.1,<3). Use Debian 13 or later.
 - **Prepare on the management PC / upstream router:** assign the management PC a static IP or configure a DHCP reservation on the router. Keep the upstream and AI networks on separate, non-overlapping subnets.
 - For initial installation, have a local display and keyboard, a serial console, or equivalent access. Do not change NIC settings using SSH as your only connection.
 - Automatic integration with Docker, UFW, firewalld, existing VPNs or complex policy routing is not supported.

@@ -16,7 +16,8 @@
 ## 1. 【RabbitWall導入先PC】マシンを準備する
 
 - 有線NICが2つあるLinux機。arm64・amd64を想定。NIC名は `ip -br link` で確認する。
-- Debian 13 / Ubuntu 24.04系、Python 3.11以上、systemd。NICは **既にNetworkManagerで管理されている**こと。Raspberry Pi OSなど派生OSはパッケージ・NIC・サービスの差を実機で確認する。
+- Debian 13以上 / Ubuntu 24.04系、Python 3.11以上、systemd。NICは **既にNetworkManagerで管理されている**こと。Raspberry Pi OSなど派生OSはパッケージ・NIC・サービスの差を実機で確認する。
+- **Debian 12以前は対象外**。標準の `python3-dnspython` が必要バージョン（2.6.1以上・3未満）を満たさないため、Debian 13以上を使用する。
 - **管理PC／上流ルーターで事前準備**：管理PCのIPを固定するか、ルーターにDHCP予約を設定する。上流ネットワークとAI側ネットワークを重複させない。
 - 初回はローカル画面・キーボード、シリアル、または同等のコンソールを確保する。SSHだけでNICを変更しない。
 - Docker/UFW/firewalldとの併用、既存のVPNや複雑なポリシールーティングへの自動統合は対象外。
