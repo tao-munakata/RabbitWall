@@ -92,3 +92,42 @@ for(const theme of ["amber","cyan","violet","white","green","blue","red"]){pan.s
 pan.setTheme("__proto__");assert.equal(pan.theme,"amber");
 pan.setTheme("cyan");assert.notEqual(pan.color("#ed9630"),"#ed9630");
 console.log("Session atlas: map pan/reset, drag-versus-click, and theme validation passed.");
+
+// Zoom keeps the world point under the cursor fixed, including after a pan.
+const zoom=Object.create(SessionAtlas.prototype);
+Object.assign(zoom,{network:pan.network,world,width:1280,height:500,zoom:1,
+  offset:{x:90,y:40},model:{...grouped,routes:[grouped.routes[0]]},
+  paintBackground:()=>{},draw:()=>{},drag:null,panFrame:null});
+zoom.canvas={getBoundingClientRect:()=>({left:20,top:30,width:1280,height:500}),
+  classList:{add:()=>{},remove:()=>{}},hasPointerCapture:()=>false};
+global.requestAnimationFrame=()=>1;global.cancelAnimationFrame=()=>{};
+let prevented=0;
+const wheel={clientX:500,clientY:270,deltaY:-180,deltaMode:0,preventDefault:()=>prevented++};
+const anchor={x:480/zoom.zoom-zoom.offset.x,y:240/zoom.zoom-zoom.offset.y};
+zoom.wheelZoom(wheel);
+assert.ok(zoom.zoom>1);
+assert.ok(Math.abs((anchor.x+zoom.offset.x)*zoom.zoom-480)<1e-9);
+assert.ok(Math.abs((anchor.y+zoom.offset.y)*zoom.zoom-240)<1e-9);
+assert.equal(prevented,1);
+zoom.layout();
+// Click selection uses the same camera transform as map drawing.
+const zoomPath=zoom.paths[0],mid=quadratic(zoomPath.a,zoomPath.b,zoomPath.c,.5);
+let picked;zoom.select=key=>picked=key;
+zoom.pick({clientX:20+mid.x*zoom.zoom,clientY:30+mid.y*zoom.zoom});
+assert.equal(picked,zoomPath.route.key);
+// A drag of 60 screen pixels must still move the map 60 pixels when zoomed.
+const origin={...zoom.offset};zoom.drag={id:9,x:100,y:100,origin,moved:false};
+zoom.movePan({pointerId:9,clientX:160,clientY:100});
+assert.ok(Math.abs((zoom.offset.x-origin.x)*zoom.zoom-60)<1e-9);
+zoom.drag=null;
+for(let i=0;i<20;i++)zoom.wheelZoom({...wheel,deltaY:-500});
+assert.equal(zoom.zoom,6);
+for(let i=0;i<20;i++)zoom.wheelZoom({...wheel,deltaY:500});
+assert.equal(zoom.zoom,1);
+const priorPrevented=prevented;
+zoom.wheelZoom({...wheel,ctrlKey:true});zoom.wheelZoom({...wheel,metaKey:true});
+assert.equal(prevented,priorPrevented);assert.equal(zoom.zoom,1);
+zoom.wheelZoom({...wheel,deltaY:-1,deltaMode:1});assert.ok(zoom.zoom>1);
+zoom.wheelZoom({...wheel,deltaY:-1,deltaMode:2});assert.ok(zoom.zoom>2);
+zoom.resetPosition();assert.equal(zoom.zoom,1);assert.deepEqual(zoom.offset,{x:0,y:0});
+console.log('Session atlas: cursor-anchored wheel zoom, bounds, zoomed selection/drag, wheel units, browser shortcuts and reset passed.');

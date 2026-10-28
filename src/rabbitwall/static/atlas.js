@@ -70,12 +70,13 @@
       this.rows = []; this.model = groupFlows([], {}); this.kind = "flows";
       this.active = false; this.paused = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       this.initialPaused=this.paused;
-      this.offset={x:0,y:0};this.drag=null;this.panFrame=null;this.suppressClick=false;this.theme="amber";
+      this.offset={x:0,y:0};this.zoom=1;this.drag=null;this.panFrame=null;this.suppressClick=false;this.theme="amber";
       this.stale = false; this.selected = null; this.animation = null; this.points = new Map(); this.paths = [];
       this.background = document.createElement("canvas");
       this.observer = new ResizeObserver(() => this.resize()); this.observer.observe(this.canvas.parentElement);
       document.addEventListener("visibilitychange", () => this.schedule());
       this.canvas.addEventListener("click", event => {if(this.suppressClick){this.suppressClick=false;return;}this.pick(event);});
+      this.canvas.addEventListener("wheel",event=>this.wheelZoom(event),{passive:false});
       this.canvas.addEventListener("pointerdown",event=>this.startPan(event));
       this.canvas.addEventListener("pointermove",event=>this.movePan(event));
       for(const type of ["pointerup","pointercancel","lostpointercapture"])this.canvas.addEventListener(type,event=>this.endPan(event));
@@ -94,8 +95,23 @@
     }
     resetPosition() {
       if(this.panFrame)cancelAnimationFrame(this.panFrame);
-      this.panFrame=null;this.drag=null;this.offset={x:0,y:0};
+      this.panFrame=null;this.drag=null;this.offset={x:0,y:0};this.zoom=1;
       this.canvas.classList.remove("dragging");this.layout();this.draw(performance.now());
+    }
+    wheelZoom(event) {
+      // Leave browser zoom shortcuts intact; the wheel controls only this map.
+      if(event.ctrlKey || event.metaKey || this.drag || !this.width || !Number.isFinite(event.deltaY) || !event.deltaY)return;
+      event.preventDefault();
+      const previous=this.zoom || 1;
+      const delta=event.deltaY*(event.deltaMode===1 ? 16 : event.deltaMode===2 ? this.height : 1);
+      const zoom=Math.max(1,Math.min(6,previous*Math.exp(-Math.max(-500,Math.min(500,delta))*.002)));
+      if(zoom===previous)return;
+      const rect=this.canvas.getBoundingClientRect();
+      const x=(event.clientX-rect.left)*this.width/rect.width;
+      const y=(event.clientY-rect.top)*this.height/rect.height;
+      this.offset={x:this.offset.x+x/zoom-x/previous,y:this.offset.y+y/zoom-y/previous};
+      this.zoom=zoom;
+      if(!this.panFrame)this.panFrame=requestAnimationFrame(()=>{this.panFrame=null;this.layout();this.draw(performance.now());});
     }
     startPan(event) {
       if(this.drag || event.isPrimary===false || event.button!==0)return;
@@ -108,7 +124,7 @@
       const dx=event.clientX-this.drag.x,dy=event.clientY-this.drag.y;
       if(Math.hypot(dx,dy)>4)this.drag.moved=true;
       if(!this.drag.moved)return;
-      this.offset={x:this.drag.origin.x+dx,y:this.drag.origin.y+dy};
+      this.offset={x:this.drag.origin.x+dx/(this.zoom || 1),y:this.drag.origin.y+dy/(this.zoom || 1)};
       this.canvas.classList.add("dragging");
       if(!this.panFrame)this.panFrame=requestAnimationFrame(()=>{this.panFrame=null;this.layout();this.draw(performance.now());});
     }
@@ -239,6 +255,7 @@
       ctx.setTransform(this.scale,0,0,this.scale,0,0); ctx.clearRect(0,0,w,h);
       const ocean=ctx.createRadialGradient(w*.55,h*.32,0,w*.55,h*.32,w*.7);
       ocean.addColorStop(0,this.color("#0b2424")); ocean.addColorStop(1,this.color("#030908")); ctx.fillStyle=ocean; ctx.fillRect(0,0,w,h);
+      const viewScale=this.scale*(this.zoom || 1);ctx.setTransform(viewScale,0,0,viewScale,0,0);
       ctx.strokeStyle=this.color("#1b3c37"); ctx.lineWidth=.5;
       for (let lon=-180;lon<=180;lon+=30) { const a=this.project([lon,90]),b=this.project([lon,-90]);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke(); }
       const scale=Math.min((w-32)/360,(h-54)/180),worldWidth=scale*360;
@@ -266,7 +283,7 @@
     draw(now) {
       if (!this.width || !this.active) return;
       const ctx=this.ctx;ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,this.canvas.width,this.canvas.height);ctx.drawImage(this.background,0,0);
-      ctx.setTransform(this.scale,0,0,this.scale,0,0);
+      const viewScale=this.scale*(this.zoom || 1);ctx.setTransform(viewScale,0,0,viewScale,0,0);
       const moving=!this.paused && !this.stale && !document.hidden;
       for (const path of this.paths) {
         const {route,a,b,c}=path, highlighted=!this.selected || this.selected===route.key;
@@ -315,8 +332,9 @@
       this.animation=requestAnimationFrame(frame);
     }
     pick(event) {
-      const rect=this.canvas.getBoundingClientRect(),point={x:event.clientX-rect.left,y:event.clientY-rect.top};
-      let selected=null,nearest=13;
+      const rect=this.canvas.getBoundingClientRect(),zoom=this.zoom || 1;
+      const point={x:(event.clientX-rect.left)*this.width/rect.width/zoom,y:(event.clientY-rect.top)*this.height/rect.height/zoom};
+      let selected=null,nearest=13/zoom;
       for (const path of this.paths) for (let t=0;t<=1;t+=.025) {
         const p=quadratic(path.a,path.b,path.c,t),distance=Math.hypot(p.x-point.x,p.y-point.y);
         if(distance<nearest){nearest=distance;selected=path.route.key;}

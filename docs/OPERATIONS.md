@@ -13,6 +13,8 @@ Sessions are collected about every five seconds; nodes are checked with Ping abo
 
 Node status labels are **正** (healthy), **断** (no Ping response), **不** (unable to check), and **古** (monitoring data is stale). A host configured not to respond to Ping can appear as **断** even while running.
 
+Use the mouse wheel over the map to zoom between 1× and 6× around the cursor. The LAN layout, labels and routes zoom together. Drag to pan; Initial view resets both zoom and position. Ctrl/Command wheel gestures remain available to the browser.
+
 ## Opening and closing Internet access
 
 Use the toggle through the management PC's mTLS connection. The gate starts **閉 (closed)** after a reboot, controller restart, installation or update. While **開 (open)**, access is maintained by a 20-second kernel lease that the controller renews. If renewal stops, the lease expires and access closes.
