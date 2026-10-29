@@ -254,7 +254,7 @@ After updating the RabbitWall source, run this on the RabbitWall machine:
 sudo python3 setup.py update
 ```
 
-This updates the application, DNS and service definitions together while preserving configuration, NAT and mTLS. **The gate is closed immediately after an update.** After the command finishes, return to the management PC's browser, force-reload it, verify the displayed state, and then reopen the gate if appropriate.
+This updates the application, DNS and service definitions together while preserving configuration, NAT, mTLS and saved UI node settings. An installed Caddy service that was active or enabled is restarted and checked after the web service starts. **The gate is closed immediately after an update.** After the command finishes, return to the management PC's browser, force-reload it, verify the displayed state, and then reopen the gate if appropriate.
 
 ## Correcting IP addresses and reapplying configuration [RabbitWall host local console]
 
@@ -267,7 +267,7 @@ sudo python3 setup.py reconfigure --config rabbitwall.json --apply-network
 sudo python3 setup.py doctor
 ```
 
-Do not run the network change over SSH: changing the addresses or firewall can disconnect it. The command validates the input, Unbound configuration and firewall, then backs up the existing configuration and runtime firewall. It applies both NetworkManager profiles, routing settings, firewall, NAT and DNS, saves `/etc/rabbitwall.json`, and deploys the application and services. A separate `update` is unnecessary. The gate finishes **closed**. Check management access and DNS before reopening it.
+Do not run the network change over SSH: changing the addresses or firewall can disconnect it. The command validates the input, Unbound configuration and firewall, then backs up the existing configuration and runtime firewall. It applies both NetworkManager profiles, routing settings, firewall, NAT and DNS, saves `/etc/rabbitwall.json`, and deploys the application and services. A separate `update` is unnecessary. This clears `/etc/rabbitwall-nodes/nodes.json` and applies the supplied JSON nodes; copy wanted UI nodes into the input file first. The gate finishes **closed**. Check management access and DNS before reopening it.
 
 Existing mTLS certificates, keys, operation key and history are retained. Caddy's bind address, management PC restriction and HTTPS firewall rule are regenerated when mTLS is installed. A changed console hostname requires a matching server certificate; an incompatible certificate is rejected before network changes. If the uplink IP changes, update the management PC's hosts/DNS entry for the console hostname; AI hosts also need their gateway/DNS settings adjusted if the AI-side address changes. Upstream static routes must match the new subnets when NAT is disabled.
 

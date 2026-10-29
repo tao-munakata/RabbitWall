@@ -49,6 +49,10 @@ def deploy(config):
     for source in targets.values():
         if source.suffix == '.py':
             compile(source.read_bytes(), str(source), 'exec')
+    caddy_installed = Path('/etc/systemd/system/rabbitwall-caddy.service').is_file()
+    restore_caddy = caddy_installed and (
+        subprocess.run(['systemctl','is-active','--quiet','rabbitwall-caddy'], capture_output=True).returncode == 0
+        or subprocess.run(['systemctl','is-enabled','--quiet','rabbitwall-caddy'], capture_output=True).returncode == 0)
     close_installed()
     # Stop the controller too, so concurrent UI requests cannot reopen during update.
     # Nonexistent units are expected during the initial installation.
@@ -69,7 +73,7 @@ def deploy(config):
             raise ValueError(f'DNS cannot bind {address}:53: {error}. Gate remains closed; inspect ip -br -4 addr and sudo ss -luntp.') from error
     backup = Path('/var/backups/rabbitwall') / ('application-' + dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
     backup.mkdir(parents=True, mode=0o700)
-    saved = list(targets) + [CONFIG_PATH, Path('/etc/nftables.conf'), Path('/etc/nftables.d/rabbitwall.nft')]
+    saved = list(targets) + [CONFIG_PATH, Path('/etc/nftables.conf'), Path('/etc/nftables.d/rabbitwall.nft'), Path('/etc/rabbitwall.json'), Path('/etc/rabbitwall-nodes/nodes.json')]
     for target in saved:
         if target.is_file():
             destination = backup / str(target).lstrip('/')
@@ -99,4 +103,7 @@ def deploy(config):
     for service in SERVICES:
         run('systemctl', 'restart', service)
         run('systemctl', 'is-active', '--quiet', service)
+    if restore_caddy:
+        run('systemctl', 'restart', 'rabbitwall-caddy')
+        run('systemctl', 'is-active', '--quiet', 'rabbitwall-caddy')
     print('Application and DNS installed. Internet gate is CLOSED.')

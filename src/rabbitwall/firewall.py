@@ -1,6 +1,6 @@
 """nftables configuration generated directly from RabbitWall installation settings."""
 import ipaddress
-from settings import validate
+from settings import validate, monitored, management_allowed
 
 LEASE = 20
 PROBE_COMMENT = 'rabbitwall-health-probe'
@@ -32,12 +32,55 @@ def dns_rule(config):
             f'counter accept comment "{DNS_COMMENT}"\n')
 
 
-def probe_rules(config):
+NODE_ACCESS_COMMENT = 'rabbitwall-node-access'
+NODE_PROBE_COMMENT = 'rabbitwall-node-probes'
+ACCESS_CHAIN = 'rabbitwall_node_access'
+PROBE_CHAIN = 'rabbitwall_node_probes'
+
+
+def node_rule_batch(config, objects):
+    """Replace only node ACL/probe chains; never flush the gate or conntrack."""
     c = validate(config)
-    return ''.join(f'insert rule inet rabbitwall_filter output oifname "{node["interface"]}" '
-                   f'ip saddr {ipaddress.IPv4Interface(c["ai_cidr"] if node["interface"]==c["ai_if"] else c["uplink_cidr"]).ip} '
-                   f'ip daddr {node["ip"]} icmp type echo-request counter accept comment "{PROBE_COMMENT}"\n'
-                   for node in c['nodes'])
+    ai = ipaddress.IPv4Interface(c['ai_cidr'])
+    lines = []
+    chains = {obj['chain']['name'] for obj in objects
+              if obj.get('chain', {}).get('table') == 'rabbitwall_filter'}
+    for obj in objects:
+        rule = obj.get('rule', {})
+        if rule.get('table') == 'rabbitwall_filter' and rule.get('comment') in {
+                PROBE_COMMENT, NODE_ACCESS_COMMENT, NODE_PROBE_COMMENT}:
+            lines.append(f'delete rule inet rabbitwall_filter {rule["chain"]} handle {int(rule["handle"])}')
+    for chain in (ACCESS_CHAIN, PROBE_CHAIN):
+        lines.append(f'{"flush" if chain in chains else "add"} chain inet rabbitwall_filter {chain}')
+    lines += [f'insert rule inet rabbitwall_filter forward jump {ACCESS_CHAIN} comment "{NODE_ACCESS_COMMENT}"',
+              f'insert rule inet rabbitwall_filter output jump {PROBE_CHAIN} comment "{NODE_PROBE_COMMENT}"',
+              f'add rule inet rabbitwall_filter {ACCESS_CHAIN} ct state invalid return']
+    for node in c['nodes']:
+        if monitored(node):
+            source = ipaddress.IPv4Interface(c['ai_cidr'] if node['interface'] == c['ai_if'] else c['uplink_cidr']).ip
+            lines.append(f'add rule inet rabbitwall_filter {PROBE_CHAIN} oifname "{node["interface"]}" '
+                         f'ip saddr {source} ip daddr {node["ip"]} icmp type echo-request counter accept')
+        if node['interface'] != c['ai_if']: continue
+        outbound = f'iifname "{c["uplink_if"]}" oifname "{c["ai_if"]}" ip saddr {c["admin_ip"]} ip daddr {node["ip"]}'
+        inbound = f'iifname "{c["ai_if"]}" oifname "{c["uplink_if"]}" ip saddr {node["ip"]} ip daddr {c["admin_ip"]}'
+        if management_allowed(node, 'ssh', c):
+            lines += [f'add rule inet rabbitwall_filter {ACCESS_CHAIN} {outbound} tcp dport 22 ct state {{ new, established }} accept',
+                      f'add rule inet rabbitwall_filter {ACCESS_CHAIN} {inbound} tcp sport 22 ct state established ct direction reply accept']
+        if management_allowed(node, 'ping', c):
+            lines += [f'add rule inet rabbitwall_filter {ACCESS_CHAIN} {outbound} icmp type echo-request accept',
+                      f'add rule inet rabbitwall_filter {ACCESS_CHAIN} {inbound} icmp type echo-reply ct state established accept']
+    # These denies precede the baseline established rule, revoking existing access too.
+    outbound = f'iifname "{c["uplink_if"]}" oifname "{c["ai_if"]}" ip saddr {c["admin_ip"]} ip daddr {ai.network}'
+    inbound = f'iifname "{c["ai_if"]}" oifname "{c["uplink_if"]}" ip saddr {ai.network} ip daddr {c["admin_ip"]}'
+    lines += [f'add rule inet rabbitwall_filter {ACCESS_CHAIN} {outbound} tcp dport 22 counter drop',
+              f'add rule inet rabbitwall_filter {ACCESS_CHAIN} {outbound} icmp type echo-request counter drop',
+              f'add rule inet rabbitwall_filter {ACCESS_CHAIN} {inbound} tcp sport 22 ct direction reply counter drop',
+              f'add rule inet rabbitwall_filter {ACCESS_CHAIN} {inbound} icmp type echo-reply counter drop']
+    return '\n'.join(lines) + '\n'
+
+
+def probe_rules(config):
+    return node_rule_batch(config, [])
 
 
 def gate(config):
@@ -84,9 +127,6 @@ def gate(config):
 
 def baseline(config):
     c = validate(config); ai = ipaddress.IPv4Interface(c['ai_cidr']); up = ipaddress.IPv4Interface(c['uplink_cidr'])
-    admin = ''.join(f'        iifname $uplink oifname $ai ip saddr $admin ip daddr {node["ip"]} tcp dport 22 ct state new accept\n'
-                    f'        iifname $uplink oifname $ai ip saddr $admin ip daddr {node["ip"]} icmp type echo-request accept\n'
-                    for node in c['nodes'] if node['interface']==c['ai_if'])
     result = f'''#!/usr/sbin/nft -f
 # RabbitWall owns this machine's nftables ruleset.
 flush ruleset
@@ -122,7 +162,7 @@ table inet rabbitwall_filter {{
         iifname $uplink ip saddr {ai.network} counter drop
         ct state invalid counter drop
         ct state established,related accept
-{admin}        iifname $ai ip daddr @non_public_v4 counter drop
+        iifname $ai ip daddr @non_public_v4 counter drop
         iifname $ai oifname $uplink tcp dport {{ 80, 443 }} ct state new accept
         iifname $ai oifname $uplink udp dport 123 accept
         limit rate 5/second burst 10 packets log prefix "rabbitwall-forward-drop "

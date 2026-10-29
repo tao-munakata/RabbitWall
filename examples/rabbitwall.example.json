@@ -12,9 +12,28 @@
   "nat": true,
   "console_name": "rabbitwall.home.arpa",
   "site_label": "LAN拠点",
-  "site_location": [139, 36],
+  "site_location": [
+    139,
+    36
+  ],
   "nodes": [
-    {"id": "gateway", "label": "Gateway", "ip": "192.168.10.1", "interface": "eth0"},
-    {"id": "ai-host", "label": "AI Host", "ip": "192.168.20.10", "interface": "eth1"}
+    {
+      "id": "gateway",
+      "label": "Gateway",
+      "ip": "192.168.10.1",
+      "interface": "eth0",
+      "monitor": true,
+      "allow_ssh": false,
+      "allow_ping": false
+    },
+    {
+      "id": "ai-host",
+      "label": "AI Host",
+      "ip": "192.168.20.10",
+      "interface": "eth1",
+      "monitor": true,
+      "allow_ssh": true,
+      "allow_ping": true
+    }
   ]
 }

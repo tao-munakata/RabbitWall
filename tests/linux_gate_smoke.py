@@ -1,6 +1,8 @@
 import test_environment
 """Kernel forwarding tests. ONLY in disposable --network none Docker container."""
 import os
+import copy
+import tempfile
 from pathlib import Path
 import subprocess
 import sys
@@ -113,6 +115,52 @@ def main():
         client(None, "10.0.0.254", 53, source="10.1.0.1", udp=True)
         client("ai", "10.0.0.9", 443, expected=False)  # ON never widens existing LAN restrictions.
         print("PASS: ON permits local DNS and relay upstream, direct DNS bypass blocked", flush=True)
+        # Live node edits must not recreate/close the Internet gate.
+        import node_config
+        ip('-n','ai','addr','add','10.1.0.11/24','dev','ai-side')
+        management_code = '''import socket,sys
+s=socket.socket();s.settimeout(.7);s.bind(("10.0.0.9",0));s.connect(("10.1.0.10",22))
+print("ready",flush=True)
+for line in sys.stdin:
+ try:
+  s.sendall(b"test");print("ok" if s.recv(100)==b"test" else "bad",flush=True)
+ except OSError: print("blocked",flush=True)
+'''
+        management = subprocess.Popen(['ip','netns','exec','upstream',sys.executable,'-u','-c',management_code],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
+        children.append(management)
+        assert management.stdout.readline().strip()=='ready'
+        management.stdin.write('send\n');management.stdin.flush();assert management.stdout.readline().strip()=='ok'
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);original=copy.deepcopy(SETTINGS);edited=copy.deepcopy(original)
+            for node in edited['nodes']:
+                if node['interface']==edited['ai_if']: node.update(monitor=False,allow_ssh=False,allow_ping=False)
+            edited['nodes'].append({'id':'second-ai','label':'Second AI','ip':'10.1.0.11','interface':'eth1','monitor':False,'allow_ssh':False,'allow_ping':True})
+            gate_handle=controller.handle
+            def save_nodes(current, nodes):
+                result=node_config.save(current,{'nodes':node_config.document(dict(current,nodes=nodes))['nodes'],'revision':node_config.revision(current)},control.nft,control.baseline,root/'nodes.json',root/'rabbitwall.nft')
+                assert controller.status()['enabled'] and controller.handle==gate_handle
+                controller.tick()
+                return result
+            edited=save_nodes(original,edited['nodes'])
+            management.stdin.write('send\n');management.stdin.flush();assert management.stdout.readline().strip()=='blocked'
+            client('upstream','10.1.0.10',22,source='10.0.0.9',expected=False)
+            client('upstream','10.1.0.11',22,source='10.0.0.9',expected=False)
+            ping=['ip','netns','exec','upstream','ping','-n','-c','1','-W','1','-I','10.0.0.9']
+            assert subprocess.run(ping+['10.1.0.11'],capture_output=True).returncode==0
+            assert subprocess.run(ping+['10.1.0.10'],capture_output=True).returncode!=0
+            probes=control.probe_nodes(config=edited)
+            assert all(node['state']=='disabled' for node in probes if node['id'] in ('ai-host','second-ai'))
+            edited['nodes'][-1]['allow_ssh']=True
+            # Use the revision of the unmodified saved document.
+            import json
+            current=dict(edited,nodes=json.loads((root/'nodes.json').read_text())['nodes'])
+            edited=save_nodes(current,edited['nodes'])
+            client('upstream','10.1.0.11',22,source='10.0.0.9')
+            client('ai','1.1.1.1',443)
+            client('ai','10.1.0.1',53,udp=True)
+            save_nodes(edited,original['nodes'])
+            persisted=(root/'rabbitwall.nft').read_text()
+        print('PASS: live multi-node edits preserve ON/DNS, independently grant SSH/Ping, revoke established SSH and disable probes',flush=True)
         held_code = '''import socket,sys
 s=socket.create_connection(("1.1.1.1",443),timeout=0.7)
 print("ready",flush=True)
@@ -181,7 +229,44 @@ except OSError: print("blocked",flush=True)
         controller.set_enabled(True)
         control.install_runtime()
         assert not controller.status()["enabled"] and not controller.desired
+        control.nft(['-f','-'],baseline(SETTINGS).replace('include "/etc/nftables.d/rabbitwall.nft"',persisted))
+        assert not control.read_gate()['enabled']
+        client('upstream','10.1.0.10',22,source='10.0.0.9')
         print("PASS: kernel lease expiry and controller/table restart default OFF", flush=True)
+        # Exercise the actual root controller socket and durable node storage.
+        Path('/etc/rabbitwall').mkdir(exist_ok=True)
+        Path('/etc/rabbitwall-nodes').mkdir(mode=0o755,exist_ok=True)
+        Path('/etc/nftables.d').mkdir(exist_ok=True)
+        Path('/etc/nftables.d/rabbitwall.nft').write_text(persisted)
+        def start_controller():
+            process=subprocess.Popen([sys.executable,'-B',ROOT/'src/rabbitwall/control.py','run'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            children.append(process)
+            deadline=time.monotonic()+5
+            while not control.SOCKET.exists():
+                assert process.poll() is None,process.stderr.read()
+                assert time.monotonic()<deadline
+                time.sleep(.02)
+            return process
+        process=start_controller()
+        doc=control.request_control('nodes')
+        control.request_control('enable')
+        saved=control.request_control('save_nodes',payload={'nodes':[],'revision':doc['revision']})
+        assert saved['nodes']==[] and control.request_control('status')['enabled']
+        assert control.request_control('status')['nodes'][0]['id']=='rabbitwall'
+        try:
+            control.request_control('save_nodes',payload={'nodes':doc['nodes'],'revision':doc['revision']})
+        except node_config.RevisionConflict: pass
+        else: raise AssertionError('Socket accepted a stale revision')
+        assert Path('/etc/rabbitwall-nodes/nodes.json').is_file()
+        # Ordinary CLI plan/inspect users must be able to load non-secret metadata.
+        subprocess.run([sys.executable,'-B','-c',
+            "import sys;sys.path.insert(0,sys.argv[1]);import settings;assert settings.load()['nodes']==[]",
+            str(ROOT/'src/rabbitwall')],user='nobody',group='nogroup',check=True)
+        process.terminate();process.wait(timeout=3)
+        process=start_controller()
+        assert control.request_control('nodes')['nodes']==[]
+        assert not control.request_control('status')['enabled']
+        print('PASS: actual controller socket saves/loads nodes, rejects stale writes, preserves ON on save and retains settings across restart',flush=True)
     finally:
         for child in children:
             child.terminate()

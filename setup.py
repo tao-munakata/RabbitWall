@@ -15,7 +15,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / 'src/rabbitwall'))
-from settings import validate, load
+from settings import validate, load, NODES_CONFIG, require_config
 
 DEPENDENCIES = ['python3', 'python3-dnspython', 'python3-protobuf', 'unbound', 'conntrack', 'nftables', 'iproute2', 'iputils-ping', 'kmod']
 
@@ -39,8 +39,8 @@ def init(path, defaults=False):
         ai = ipaddress.IPv4Interface(config['ai_cidr'])
         example = str(ai.network.network_address + 10) if ai.network.num_addresses > 11 else str(ai.network.network_address+2)
         target = input(f'AI host IPv4 [{example}]: ').strip() or example
-        config['nodes'] = [{'id':'gateway','label':'Gateway','ip':config['gateway'],'interface':config['uplink_if']},
-                           {'id':'ai-host','label':'AI Host','ip':target,'interface':config['ai_if']}]
+        config['nodes'] = [{'id':'gateway','label':'Gateway','ip':config['gateway'],'interface':config['uplink_if'],'monitor':True,'allow_ssh':False,'allow_ping':False},
+                           {'id':'ai-host','label':'AI Host','ip':target,'interface':config['ai_if'],'monitor':True,'allow_ssh':True,'allow_ping':True}]
     config = validate(config)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(config, ensure_ascii=False, indent=2)+'\n'); path.chmod(0o600)
@@ -212,7 +212,7 @@ def install(plan_dir, apply, reapply=False):
     backup = Path('/var/backups/rabbitwall')/dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     backup.mkdir(parents=True,mode=0o700)
     for path in ['/etc/nftables.conf','/etc/rabbitwall.json','/etc/nftables.d/rabbitwall.nft','/etc/NetworkManager/system-connections',
-                 '/etc/NetworkManager/conf.d/90-rabbitwall-ai.conf','/etc/sysctl.d/90-rabbitwall-router.conf','/etc/modules-load.d/rabbitwall-monitor.conf', '/etc/rabbitwall-mtls/Caddyfile', '/etc/nftables.d/rabbitwall-web.nft', '/etc/rabbitwall-unbound.conf']:
+                 '/etc/NetworkManager/conf.d/90-rabbitwall-ai.conf','/etc/sysctl.d/90-rabbitwall-router.conf','/etc/modules-load.d/rabbitwall-monitor.conf', '/etc/rabbitwall-mtls/Caddyfile', '/etc/nftables.d/rabbitwall-web.nft', '/etc/rabbitwall-unbound.conf', str(NODES_CONFIG)]:
         source=Path(path)
         if source.exists():
             target=backup/path.lstrip('/');target.parent.mkdir(parents=True,exist_ok=True)
@@ -227,7 +227,7 @@ base=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 systemctl disable --now rabbitwall-dns-observer rabbitwall-dns rabbitwall-web rabbitwall-control rabbitwall-collector rabbitwall-caddy 2>/dev/null || true
 nft -f "$base/runtime.nft"
 if [ ! -f "$base/nftables-was-enabled" ]; then systemctl disable nftables; fi
-for file in /etc/nftables.conf /etc/rabbitwall.json /etc/nftables.d/rabbitwall.nft /etc/NetworkManager/conf.d/90-rabbitwall-ai.conf /etc/sysctl.d/90-rabbitwall-router.conf /etc/modules-load.d/rabbitwall-monitor.conf /etc/rabbitwall-mtls/Caddyfile /etc/nftables.d/rabbitwall-web.nft /etc/rabbitwall-unbound.conf; do
+for file in /etc/nftables.conf /etc/rabbitwall.json /etc/nftables.d/rabbitwall.nft /etc/NetworkManager/conf.d/90-rabbitwall-ai.conf /etc/sysctl.d/90-rabbitwall-router.conf /etc/modules-load.d/rabbitwall-monitor.conf /etc/rabbitwall-mtls/Caddyfile /etc/nftables.d/rabbitwall-web.nft /etc/rabbitwall-unbound.conf /etc/rabbitwall-nodes/nodes.json; do
     if [ ! -f "$base$file" ]; then rm -f "$file"; fi
 done
 cp -a "$base/etc/." /etc/
@@ -250,6 +250,7 @@ echo 'Saved configuration restored. Reboot locally to reactivate the original pr
         run('nft','-f','-', input=firewall_text, text=True)
         check(config)
     # Prepare files and closed firewall before activating either new connection.
+    if reapply: NODES_CONFIG.unlink(missing_ok=True)
     shutil.copyfile(plan_dir/'config.json','/etc/rabbitwall.json');os.chmod('/etc/rabbitwall.json',0o644)
     targets={'rabbitwall.nft':'/etc/nftables.d/rabbitwall.nft','nftables.conf':'/etc/nftables.conf','90-rabbitwall-router.conf':'/etc/sysctl.d/90-rabbitwall-router.conf',
              'rabbitwall-monitor.conf':'/etc/modules-load.d/rabbitwall-monitor.conf',
@@ -277,7 +278,6 @@ echo 'Saved configuration restored. Reboot locally to reactivate the original pr
         run('nmcli','connection','up','uuid',str(uuid.uuid5(uuid.NAMESPACE_DNS,'rabbitwall.'+name+'.'+device)))
     if reapply: check(config, require_addresses=True)
     deploy_application(config)
-    if web: run('systemctl','restart','rabbitwall-caddy')
     print(f'{"Reconfigured" if reapply else "Installed"}, gate CLOSED. Backup and recovery: {backup}.')
 
 
@@ -320,7 +320,8 @@ def main():
         elif args.command=='reconfigure':reconfigure(args.config,args.apply_network)
         elif args.command=='update':
             if os.geteuid()!=0: raise ValueError('Run update with sudo on the gateway')
-            deploy_application(load(Path('/etc/rabbitwall.json')))
+            require_config()
+            deploy_application(load())
             print('Updated. Gate is CLOSED; confirm the console before reopening.')
         else:doctor()
     except (OSError,ValueError,KeyError,subprocess.CalledProcessError) as error:

@@ -145,3 +145,10 @@ th{font-size:12px;letter-spacing:.5px}td,td.mono,.country{font-size:13px}
 @media(min-width:1000px) and (min-height:600px){.workspace-mode .node-list{max-height:160px;overflow:auto;overscroll-behavior:contain}}
 
 .node-row code{display:block;white-space:normal;overflow-wrap:anywhere}
+
+/* Node settings remain readable and editable without changing network interfaces. */
+.node-settings{grid-column:1/-1}.node-settings fieldset{border:0;padding:0;margin:18px 0}.node-edit-row{display:grid;grid-template-columns:minmax(130px,1fr) minmax(145px,1fr) minmax(170px,1fr) auto;gap:14px;padding:18px 0;border-top:1px solid var(--line)}
+.node-edit-row>label{display:flex;flex-direction:column;gap:7px;font-size:14px}.node-edit-row input:not([type=checkbox]),.node-edit-row select{width:100%;min-width:0;padding:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit;font-size:14px}.node-edit-flags{grid-column:1/4;display:flex;flex-wrap:wrap;gap:14px 24px}.node-edit-flags label{display:flex;align-items:center;gap:8px;font-size:14px}.node-edit-flags input{width:18px;height:18px;accent-color:var(--accent)}.node-remove{grid-column:4;grid-row:1/3;align-self:center}.node-form-actions{display:flex;gap:12px;flex-wrap:wrap}.node-form-actions button,#node-add,.node-remove{font-size:14px;padding:10px 15px;cursor:pointer}.node-settings :disabled{opacity:.5;cursor:default}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+@media(max-width:800px){.node-edit-row{grid-template-columns:1fr 1fr}.node-edit-row>label:nth-child(3){grid-column:1/-1}.node-edit-flags{grid-column:1/-1}.node-remove{grid-column:1/-1;grid-row:auto;justify-self:start}}
+
+.node-state.idle{color:var(--muted);border-color:var(--line)}

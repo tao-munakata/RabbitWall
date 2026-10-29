@@ -4,6 +4,8 @@
 
 主要な関数呼び出しとデータの流れを処理別に示します。実線は通信・呼び出し・入出力、点線はファイルを介した受け渡しです。関数名は実装に合わせています。正常系を中心に簡略化し、補助関数は末尾の索引にまとめています。図はGitHubで表示できるMermaid形式です。
 
+外部コマンドと発行元、2種類のUnixソケットは [OSコマンド参考資料](OS_COMMANDS.ja.md) を参照してください。
+
 ## 1. 全体構成
 
 通常のパケットはLinuxカーネルのnftablesが転送・遮断します。Pythonが全パケットを中継するわけではありません。DNSはUnboundが受け付け、Pythonは独立したdnstap観測サービスで応答のコピーを解析します。Web・収集・制御・DNS・DNS観測は別々のsystemdサービスです。
@@ -51,6 +53,7 @@ flowchart TB
     Main -->|reconfigure| Reconfigure["reconfigure(): validate / backup / apply NIC + firewall + mTLS"]
     Reconfigure --> Deploy
     Main -->|update| Deploy
+    Deploy --> HTTPS["Restart/check installed active or enabled Caddy after web starts"]
     Deploy --> DNSCheck["require_unbound() / render() / check_config()"]
     DNSCheck --> Close["close_installed() / stop services / clear lease"]
     Close --> Copy["deployment_files() / backup / copy files"]
@@ -118,7 +121,7 @@ flowchart TB
 
 ## 5. 開閉制御と死活監視
 
-Webはstatus・enable・disableの固定操作だけをUnixソケットに送ります。制御サービスがnftコマンドを実行します。開状態は約4秒ごとに更新する20秒の許可期限で管理し、再起動・テーブル再作成・期限切れ後は自動で開き直しません。死活監視は約10秒ごとに別スレッドで実行します。
+WebはUnixソケットで固定の開閉操作と検証済みのノード設定を渡します。ノード保存は専用の管理アクセス・監視用チェーンだけを更新し、開閉ゲート・NIC・DNSを変更しません。設定のバックアップ後、`/etc/rabbitwall-nodes/nodes.json` と永続FW断片をファイル単位で原子的に保存し、書込失敗時は元のファイルと稼働ルールへの復元を試みます。監視と管理SSH・Pingの許可は独立しています。開状態は約4秒ごとに更新する20秒の許可期限で管理し、再起動・テーブル再作成・期限切れ後は自動で開き直しません。死活監視は約10秒ごとに別スレッドで実行します。
 
 ```mermaid
 flowchart TB
@@ -126,6 +129,9 @@ flowchart TB
     API --> Request["control_status() → request_control()"]
     Request --> Socket["Unix socket / JSON action"]
     Socket --> Handler["run_controller(): Handler.handle()"]
+    Handler --> SaveNodes["Controller.save_nodes() / node_config.save()"]
+    SaveNodes --> ACL["node_rule_batch() / node ACL + probe chains"]
+    SaveNodes -.-> SavedNodes["nodes.json + backups + persistent nft snippet"]
     Handler --> Status["Controller.status() → read_gate()"]
     Handler --> Set["Controller.set_enabled()"]
     Set --> Status
@@ -226,11 +232,11 @@ flowchart TB
 
 ### [src/rabbitwall/console.py](../src/rabbitwall/console.py)
 
-`utc_now()`, `scope()`, `flow_scope()`, `parse_conntrack()`, `parse_conntrack.number()`, `parse_journal()`, `command()`, `update_history()`, `atomic_json()`, `collect_once()`, `demo_state()`, `ConsoleServer.get_request()`, `ConsoleServer.process_request()`, `ConsoleServer.process_request_thread()`, `make_handler()`, `make_handler.control_status()`, `make_handler.Handler.log_message()`, `make_handler.Handler.valid_token()`, `make_handler.Handler.access_status()`, `make_handler.Handler.valid_request()`, `make_handler.Handler.send_payload()`, `make_handler.Handler.do_POST()`, `make_handler.Handler.do_GET()`, `main()`, `main.stop()`
+`utc_now()`, `scope()`, `flow_scope()`, `parse_conntrack()`, `parse_journal()`, `command()`, `update_history()`, `atomic_json()`, `collect_once()`, `demo_state()`, `ConsoleServer.__init__()`, `ConsoleServer.get_request()`, `ConsoleServer.process_request()`, `ConsoleServer.process_request_thread()`, `make_handler()`, `make_handler.control_status()`, `make_handler.nodes_status()`, `make_handler.Handler.log_message()`, `make_handler.Handler.valid_token()`, `make_handler.Handler.access_status()`, `make_handler.Handler.valid_request()`, `make_handler.Handler.send_payload()`, `make_handler.Handler.do_POST()`, `make_handler.Handler.do_GET()`, `main()`
 
 ### [src/rabbitwall/control.py](../src/rabbitwall/control.py)
 
-`utc_now()`, `nft()`, `request_control()`, `read_gate()`, `baseline()`, `install_runtime()`, `apply_enabled()`, `probe_nodes()`, `Controller.status()`, `Controller.set_enabled()`, `Controller.tick()`, `run_controller()`, `run_controller.stop()`, `run_controller.Handler.handle()`, `install_persistent()`, `main()`
+`utc_now()`, `nft()`, `request_control()`, `read_gate()`, `baseline()`, `install_runtime()`, `apply_enabled()`, `probe_nodes()`, `Controller.__init__()`, `Controller.status()`, `Controller.node_settings()`, `Controller.save_nodes()`, `Controller.set_enabled()`, `Controller.tick()`, `run_controller()`, `run_controller.stop()`, `run_controller.Handler.handle()`, `install_persistent()`, `main()`
 
 ### [src/rabbitwall/dependencies.py](../src/rabbitwall/dependencies.py)
 
@@ -250,15 +256,19 @@ flowchart TB
 
 ### [src/rabbitwall/firewall.py](../src/rabbitwall/firewall.py)
 
-`dns_rule()`, `probe_rules()`, `gate()`, `baseline()`
+`dns_rule()`, `node_rule_batch()`, `probe_rules()`, `gate()`, `baseline()`
 
 ### [src/rabbitwall/geoip.py](../src/rabbitwall/geoip.py)
 
 `CountryLookup._reload()`, `CountryLookup.status()`, `CountryLookup.lookup()`, `CountryLookup.enrich()`
 
+### [src/rabbitwall/node_config.py](../src/rabbitwall/node_config.py)
+
+`revision()`, `document()`, `candidate()`, `atomic_write()`, `save()`
+
 ### [src/rabbitwall/settings.py](../src/rabbitwall/settings.py)
 
-`interface()`, `validate()`, `validate.usable()`, `load()`, `metadata()`, `require_config()`
+`interface()`, `validate()`, `validate.usable()`, `load()`, `monitored()`, `management_allowed()`, `metadata()`, `require_config()`
 
 ### [src/rabbitwall/traffic_analytics.py](../src/rabbitwall/traffic_analytics.py)
 

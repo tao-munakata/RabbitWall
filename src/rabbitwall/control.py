@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fixed-purpose local controller; never accepts addresses or nft commands from HTTP."""
+"""Fixed-purpose local controller; accepts only validated node settings, never nft commands from HTTP."""
 import argparse
 import concurrent.futures
 import datetime as dt
@@ -18,7 +18,8 @@ import subprocess
 import tempfile
 import time
 
-from settings import SETTINGS, AI_INTERFACE, AI_IP, UPLINK_IP
+from settings import SETTINGS, AI_INTERFACE, AI_IP, UPLINK_IP, monitored, NODES_CONFIG
+import node_config
 
 SOCKET = Path("/run/rabbitwall/control.sock")
 TOKEN = Path("/etc/rabbitwall/control.token")
@@ -42,13 +43,15 @@ def nft(args, script=None):
     return result.stdout
 
 
-def request_control(action, path=SOCKET):
-    if action not in {"status", "enable", "disable"}:
+def request_control(action, path=SOCKET, payload=None):
+    if action not in {"status", "enable", "disable", "nodes", "save_nodes"}:
         raise ValueError("unsupported action")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(4)
+        client.settimeout(15 if action == "save_nodes" else 4)
         client.connect(str(path))
-        client.sendall((json.dumps({"action": action}) + "\n").encode())
+        request = {"action":action}
+        if action == "save_nodes": request["payload"] = payload
+        client.sendall((json.dumps(request) + "\n").encode())
         chunks = bytearray()
         while b"\n" not in chunks:
             part = client.recv(4096)
@@ -59,6 +62,8 @@ def request_control(action, path=SOCKET):
                 raise RuntimeError("controller response too large")
         data = json.loads(chunks.split(b"\n", 1)[0])
         if not data.get("ok"):
+            if data.get("conflict"): raise node_config.RevisionConflict(data.get("error", "Node settings changed"))
+            if data.get("invalid"): raise ValueError(data.get("error", "Invalid node settings"))
             raise RuntimeError(data.get("error", "controller error"))
         return data["status"]
 
@@ -81,7 +86,7 @@ def read_gate():
 
 
 def baseline():
-    data = json.loads(nft(["-j", "list", "ruleset"]))
+    data = json.loads(nft(["-j", "-a", "list", "ruleset"]))
     objects = data.get("nftables", [])
     chains = {item["chain"]["name"]: item["chain"] for item in objects
               if item.get("chain", {}).get("table") == "rabbitwall_filter"}
@@ -96,10 +101,8 @@ def install_runtime():
     objects = baseline()
     exists = any(item.get("table", {}).get("name") == "rabbitwall_console" and
                  item["table"].get("family") == "inet" for item in objects)
-    probe_exists = any(item.get("rule", {}).get("comment") == PROBE_COMMENT for item in objects)
     script = ("delete table inet rabbitwall_console\n" if exists else "") + GATE_RULES
-    if not probe_exists:
-        script += PROBE_RULE
+    script += node_config.node_rule_batch(SETTINGS, objects)
     if not any(item.get("rule", {}).get("comment") == DNS_COMMENT for item in objects):
         script += DNS_RULE
     # Delete+create is one atomic nft transaction; no open interval in between.
@@ -114,17 +117,21 @@ def apply_enabled(enabled):
     nft(["-f", "-"], script)
 
 
-def probe_nodes(previous=None):
+def probe_nodes(previous=None, config=None):
+    config = config or SETTINGS
     previous = {node["id"]: node for node in (previous or [])}
     checked = utc_now()
     nodes = [{"id": "rabbitwall", "name": SETTINGS['label'], "ip": f"{UPLINK_IP} / {AI_IP}",
               "state": "up", "method": "local controller", "checked_at": checked,
               "last_success": checked, "latency_ms": None}]
-    for configured in SETTINGS['nodes']:
+    for configured in config['nodes']:
         identity, name, address, interface = (configured[key] for key in ('id', 'label', 'ip', 'interface'))
         node = {"id": identity, "name": name, "ip": address, "state": "unknown",
                 "method": "ICMP", "checked_at": utc_now(),
                 "last_success": previous.get(identity, {}).get("last_success"), "latency_ms": None}
+        if not monitored(configured):
+            node["state"] = "disabled"; node["method"] = "disabled"
+            nodes.append(node); continue
         try:
             proc = subprocess.run(["ping", "-n", "-c", "1", "-W", "1", "-I", interface, address],
                                   text=True, capture_output=True, timeout=3,
@@ -149,6 +156,8 @@ class Controller:
         self.desired = False
         self.error = None
         self.nodes = []
+        self.config = SETTINGS
+        self.node_revision = node_config.revision(self.config)
 
     def status(self):
         actual = read_gate()
@@ -160,6 +169,29 @@ class Controller:
             actual = read_gate()
         return {"enabled": actual["enabled"], "available": True, "checked_at": utc_now(),
                 "lease_seconds": LEASE, "nodes": self.nodes, "error": self.error}
+
+    def node_settings(self):
+        return node_config.document(self.config)
+
+    def save_nodes(self, payload):
+        self.status()
+        try:
+            self.config = node_config.save(self.config, payload, nft, baseline)
+        except (ValueError, node_config.RevisionConflict):
+            raise
+        except Exception:
+            # A failure must never widen the Internet gate.
+            self.desired = False
+            apply_enabled(False)
+            raise
+        self.node_revision = node_config.revision(self.config)
+        checked = utc_now()
+        self.nodes = [{"id":"rabbitwall", "name":self.config['label'], "ip":f"{UPLINK_IP} / {AI_IP}",
+                       "state":"up", "checked_at":checked, "last_success":checked, "latency_ms":None},
+                      *[{"id":node['id'], "name":node['label'], "ip":node['ip'],
+                         "state":"unknown" if monitored(node) else "disabled", "checked_at":checked,
+                         "last_success":None, "latency_ms":None} for node in self.config['nodes']]]
+        return self.node_settings()
 
     def set_enabled(self, enabled):
         self.status()
@@ -203,15 +235,21 @@ def run_controller():
         def handle(self):
             self.request.settimeout(1)
             try:
-                raw = self.rfile.readline(257)
-                if len(raw) > 256 or not raw.endswith(b"\n"):
+                raw = self.rfile.readline(16385)
+                if len(raw) > 16384 or not raw.endswith(b"\n"):
                     raise ValueError("invalid control request")
                 data = json.loads(raw)
-                if not isinstance(data, dict) or set(data) != {"action"}:
+                if not isinstance(data, dict) or set(data) != ({"action", "payload"} if data.get("action") == "save_nodes" else {"action"}):
                     raise ValueError("invalid control request")
                 action = data["action"]
                 if action == "status":
                     status = controller.status()
+                elif action == "nodes":
+                    status = controller.node_settings()
+                elif action == "save_nodes":
+                    status = controller.save_nodes(data["payload"])
+                    pid, uid, gid = struct.unpack("3i", self.request.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                    print(json.dumps({"event":action,"at":utc_now(),"pid":pid,"uid":uid,"gid":gid,"count":len(status["nodes"])}), flush=True)
                 elif action in {"enable", "disable"}:
                     status = controller.set_enabled(action == "enable")
                     pid, uid, gid = struct.unpack("3i", self.request.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
@@ -221,7 +259,7 @@ def run_controller():
                     raise ValueError("unsupported action")
                 response = {"ok": True, "status": status}
             except Exception as exc:
-                response = {"ok": False, "error": str(exc)[:500]}
+                response = {"ok": False, "error": str(exc)[:500], "conflict":isinstance(exc, node_config.RevisionConflict), "invalid":isinstance(exc, ValueError)}
             try:
                 self.wfile.write((json.dumps(response) + "\n").encode())
             except OSError:
@@ -241,10 +279,15 @@ def run_controller():
                     controller.tick()
                     last_tick = now
                 if future and future.done():
-                    controller.nodes = future.result()
+                    revision, nodes = future.result()
+                    if revision == controller.node_revision: controller.nodes = nodes
+                    else: last_probe = 0.0
                     future = None
                 if future is None and now - last_probe >= 10:
-                    future = executor.submit(probe_nodes, controller.nodes)
+                    config = controller.config
+                    revision = controller.node_revision
+                    previous = controller.nodes
+                    future = executor.submit(lambda c=config, r=revision, p=previous: (r, probe_nodes(p, c)))
                     last_probe = now
                 server.handle_request()
         finally:
@@ -255,6 +298,9 @@ def run_controller():
 
 def install_persistent(config=Path("/etc/nftables.conf"), snippet=Path("/etc/nftables.d/rabbitwall.nft"), token=TOKEN):
     """Preserve the actual existing config; add only a validated include."""
+    # Node metadata is readable like the base JSON; operation keys stay private.
+    NODES_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(NODES_CONFIG.parent, 0o755)
     original = config.read_text()
     if "flush ruleset" not in original or not re.search(r"table\s+inet\s+rabbitwall_filter\b", original):
         raise RuntimeError("Expected generated rabbitwall_filter config with flush ruleset; integrate manually")

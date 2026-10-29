@@ -2,6 +2,7 @@
 let snapshot = null, tab = "flows";
 let control = null, controlBusy = false, controlDemo = false, controlEpoch = 0;
 let controlAuthorized = false;
+let nodeSettings=null, nodeDraft=[], nodeDirty=false, nodeBusy=false;
 const $ = id => document.getElementById(id);
 let sessionView = "map";
 const atlas = new window.SessionAtlas({canvas:$("atlas-canvas"), list:$("atlas-routes"),
@@ -56,6 +57,7 @@ function navigate() {
     $(page==="monitor" ? "map-controls" : "list-controls").append($("session-controls"));
     for(const name of ["map","table"]){$("view-"+name).classList.toggle("selected",sessionView===name);$("view-"+name).setAttribute("aria-pressed",String(sessionView===name));}
   }
+  if(page==="settings" && !nodeBusy && !nodeDirty)loadNodeSettings();
   atlas.setActive(page === "monitor");
   render();
 }
@@ -98,16 +100,17 @@ function renderControl() {
     const identity = document.createElement("div"), title = document.createElement("strong"), ip = document.createElement("code");
     title.textContent = node.name; ip.textContent = node.ip; identity.append(title, ip);
     const status = document.createElement("span"), last = document.createElement("small");
-    status.className = "node-state " + (node.state === "up" ? "good" : "warn");
-    status.textContent = node.state === "up" ? "正" : node.state === "no_reply" ? "断" : "不";
-    let description=node.state==="up" ? "正常" : node.state==="no_reply" ? "応答なし" : "確認不能";
+    status.className = "node-state " + (node.state === "up" ? "good" : node.state === "disabled" ? "idle" : "warn");
+    status.textContent = node.state === "up" ? "正" : node.state === "no_reply" ? "断" : node.state === "disabled" ? "休" : "不";
+    let description=node.state==="up" ? "正常" : node.state==="no_reply" ? "応答なし" : node.state==="disabled" ? "監視しない" : "確認不能";
     const age = Date.now() - new Date(node.checked_at).getTime();
     if (!control.available || age > 30000) { status.textContent = !control.available ? "不" : "古"; status.className = "node-state warn";description=!control.available ? "状態未確認" : "監視データが古い"; }
     status.title=description;status.setAttribute("aria-label",description);
-    last.textContent = (node.latency_ms == null ? "LOCAL" : node.latency_ms+" ms") + " / " + clock(node.checked_at);
+    last.textContent = (node.state === "disabled" ? "監視なし" : node.latency_ms == null ? "LOCAL" : node.latency_ms+" ms") + " / " + clock(node.checked_at);
     last.title="最終正常 "+clock(node.last_success);identity.append(last);row.append(status,identity);$("nodes").append(row);
   }
   if (!(control?.nodes || []).length) { const p = document.createElement("p"); p.className = "muted"; p.textContent = "監視データはまだありません。"; $("nodes").append(p); }
+  updateNodeButtons();
   if (snapshot) snapshot.control = control;
 }
 async function refreshControl() {
@@ -286,4 +289,85 @@ $("color-scheme").addEventListener("change",()=>{
   const name=applyTheme($("color-scheme").value);
   try { localStorage.setItem("rabbitwall-color-scheme",name);$("theme-message").textContent="配色をこのブラウザーに保存しました。"; }
   catch (_) { $("theme-message").textContent="配色を変更しました。ブラウザーに保存できないため、再読み込みすると元に戻ります。"; }
+});
+
+
+function updateNodeButtons() {
+  $("node-fields").disabled=nodeBusy || !controlAuthorized || !nodeSettings;
+  $("node-save").disabled=nodeBusy || !controlAuthorized || !nodeDirty;
+  $("node-reload").disabled=nodeBusy;
+  $("node-add").disabled=nodeDraft.length>=12;
+  $("node-count").textContent=nodeDraft.length+" / 12";
+}
+function renderNodeEditor() {
+  $("node-editor").replaceChildren();
+  nodeDraft.forEach((node,index)=>{
+    const row=document.createElement("section");row.className="node-edit-row";
+    const labelInput=(title,key)=>{
+      const label=document.createElement("label"),input=document.createElement("input");
+      label.textContent=title;input.value=node[key];input.required=true;
+      input.maxLength=key==="label" ? 32 : 15;
+      input.setAttribute("aria-label",`ノード${index+1} ${title}`);
+      input.addEventListener("input",()=>{node[key]=input.value;nodeDirty=true;updateNodeButtons();});
+      label.append(input);row.append(label);
+    };
+    labelInput("名前","label");labelInput("IPv4アドレス","ip");
+    const sideLabel=document.createElement("label"),side=document.createElement("select");sideLabel.textContent="接続先";
+    side.setAttribute("aria-label",`ノード${index+1} 接続先`);
+    for(const entry of nodeSettings.interfaces){const option=document.createElement("option");option.value=entry.name;option.textContent=(entry.side==="AI" ? "AI側" : "上流側")+` / ${entry.cidr}`;side.append(option);}
+    side.value=node.interface;sideLabel.append(side);row.append(sideLabel);
+    const flags=document.createElement("div");flags.className="node-edit-flags";
+    const management=[];
+    for(const [key,title] of [["monitor","死活監視"],["allow_ssh","管理PCからSSH"],["allow_ping","管理PCからPing"]]){
+      const label=document.createElement("label"),box=document.createElement("input");box.type="checkbox";box.checked=node[key];
+      box.setAttribute("aria-label",`ノード${index+1} ${title}`);
+      if(key!=="monitor"){box.disabled=node.interface!==nodeSettings.interfaces.find(entry=>entry.side==="AI").name;management.push([key,box]);}
+      box.addEventListener("change",()=>{node[key]=box.checked;nodeDirty=true;updateNodeButtons();});
+      label.append(box,document.createTextNode(title));flags.append(label);
+    }
+    side.addEventListener("change",()=>{
+      node.interface=side.value;
+      const ai=nodeSettings.interfaces.find(entry=>entry.side==="AI").name;
+      for(const [key,box] of management){box.disabled=node.interface!==ai;if(box.disabled){node[key]=false;box.checked=false;}}
+      nodeDirty=true;updateNodeButtons();
+    });
+    row.append(flags);
+    const remove=document.createElement("button");remove.type="button";remove.className="secondary node-remove";remove.textContent="削除";
+    remove.setAttribute("aria-label",`ノード${index+1}を削除`);
+    remove.addEventListener("click",()=>{nodeDraft.splice(index,1);nodeDirty=true;renderNodeEditor();});row.append(remove);
+    $("node-editor").append(row);
+  });
+  if(!nodeDraft.length){const empty=document.createElement("p");empty.className="muted";empty.textContent="登録ノードはありません。AIセグメント全体の通信観測は継続します。";$("node-editor").append(empty);}
+  updateNodeButtons();
+}
+async function loadNodeSettings() {
+  if(nodeBusy)return;
+  nodeBusy=true;updateNodeButtons();
+  try{
+    const response=await fetch("/api/nodes",{cache:"no-store",signal:AbortSignal.timeout(10000)});
+    const data=await response.json();if(!response.ok)throw new Error(data.error || "読込失敗");
+    nodeSettings=data.settings;nodeDraft=structuredClone(data.settings.nodes);nodeDirty=false;
+    controlAuthorized=Boolean(data.auth?.can_control);
+    $("node-message").textContent=data.demo ? "試験表示：変更はこのデモの実行中だけ保持します。" : controlAuthorized ? "変更後に「保存して反映」を押してください。" : "編集には証明書付きHTTPSで接続してください。";
+    renderNodeEditor();
+  }catch(error){$("node-message").textContent="読込失敗："+error.message;}
+  finally{nodeBusy=false;updateNodeButtons();}
+}
+$("node-add").addEventListener("click",()=>{
+  if(!nodeSettings || nodeBusy || !controlAuthorized || nodeDraft.length>=12)return;
+  nodeDraft.push({id:"node-"+crypto.randomUUID().slice(0,8),label:"",ip:"",interface:nodeSettings.interfaces.find(entry=>entry.side==="AI").name,monitor:true,allow_ssh:false,allow_ping:false});
+  nodeDirty=true;renderNodeEditor();
+});
+$("node-reload").addEventListener("click",()=>{if(!nodeDirty || window.confirm("未保存の変更を破棄して再読み込みしますか？"))loadNodeSettings();});
+$("node-form").addEventListener("submit",async event=>{
+  event.preventDefault();if(nodeBusy || !controlAuthorized || !nodeDirty)return;
+  nodeBusy=true;updateNodeButtons();$("node-message").textContent="保存して反映しています…";
+  try{
+    const response=await fetch("/api/nodes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({nodes:nodeDraft,revision:nodeSettings.revision}),signal:AbortSignal.timeout(20000)});
+    const data=await response.json();if(!response.ok)throw new Error(response.status===409 ? "ほかの画面で設定が変更されました。再読み込みしてから編集してください。" : data.error || "保存失敗");
+    nodeSettings=data.settings;nodeDraft=structuredClone(data.settings.nodes);nodeDirty=false;renderNodeEditor();
+    $("node-message").textContent=data.demo ? "試験表示：デモ内に保存しました。" : "保存して反映しました。対外接続の開閉状態は変更していません。";
+    refreshControl();refresh();
+  }catch(error){$("node-message").textContent="保存結果を確認してください："+error.message;}
+  finally{nodeBusy=false;updateNodeButtons();}
 });

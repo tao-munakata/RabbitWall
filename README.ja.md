@@ -13,7 +13,7 @@ AI用ネットワークの通信を可視化し、インターネットへの接
 - 管理PCのIP制限＋Caddyのクライアント証明書認証（mTLS）
 - 配色変更、地図のドラッグ、読みやすい状態表示
 
-IP・NIC・ノード名・DNS・拠点位置を **1つのJSONファイル**に設定します。管理画面へのアクセスは、管理PCのクライアント証明書で認証します。
+IP・NIC・初期ノード・DNS・拠点位置を **1つのJSONファイル**に設定します。導入後のノード管理と管理アクセス許可は設定画面から変更できます。管理画面へのアクセスは、管理PCのクライアント証明書で認証します。
 
 ![RabbitWall のデモ画面](docs/images/console.png)
 
@@ -83,6 +83,7 @@ sudo python3 setup.py install --apply-network
 - [日常運用・DNS・通信量の見方](docs/OPERATIONS.ja.md)
 - [セキュリティ上の範囲と報告方法](SECURITY.md)
 - [プログラムのフロー・関数と依存先の関係](docs/PROGRAM_FLOW.ja.md)
+- [OSコマンド・Unixソケット参考資料](docs/OS_COMMANDS.ja.md)
 - [開発と試験](CONTRIBUTING.md)
 
 本体はMITライセンス。地図データ等の第三者資材については [THIRD_PARTY.md](src/rabbitwall/static/THIRD_PARTY.md) を参照してください。国別IPデータは任意の追加導入です。

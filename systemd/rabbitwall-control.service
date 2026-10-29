@@ -18,6 +18,7 @@ UMask=0027
 Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
 NoNewPrivileges=yes
 ProtectSystem=strict
+ReadWritePaths=/etc/rabbitwall-nodes /etc/nftables.d
 ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes

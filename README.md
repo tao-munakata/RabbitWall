@@ -13,7 +13,7 @@ RabbitWall is a web console for a Linux gateway that lets you observe traffic fr
 - Restrict management access to one PC using source-IP filtering and Caddy client-certificate authentication (mTLS)
 - Choose a color scheme, drag the map, and check clearly labeled status indicators
 
-Configure IP addresses, network interfaces, node names, upstream DNS, and the site's map location in **one JSON file**. The management PC authenticates with a client certificate.
+Configure IP addresses, network interfaces, initial nodes, upstream DNS, and the site's map location in **one JSON file**. After installation, manage nodes and management-access permissions from Settings. The management PC authenticates with a client certificate.
 
 ![RabbitWall demo](docs/images/console.png)
 
@@ -83,6 +83,7 @@ NAT is the default, so Internet access does not require an additional static rou
 - [Daily operation, DNS, and traffic statistics](docs/OPERATIONS.md)
 - [Security boundaries and reporting](SECURITY.md)
 - [Program flow and dependency interactions](docs/PROGRAM_FLOW.md)
+- [OS commands and local IPC reference](docs/OS_COMMANDS.md)
 - [Development and testing](CONTRIBUTING.md)
 
 RabbitWall is released under the [MIT License](LICENSE). See [THIRD_PARTY.md](src/rabbitwall/static/THIRD_PARTY.md) for map data and other third-party assets. Country-IP data is an optional download.

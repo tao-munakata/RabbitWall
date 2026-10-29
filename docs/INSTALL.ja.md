@@ -254,7 +254,7 @@ RabbitWallのソースを更新したら、RabbitWallを導入するマシンで
 sudo python3 setup.py update
 ```
 
-設定・NAT・mTLSを維持して、アプリ本体・DNS・サービス定義をまとめて更新する。**更新直後は「閉」**。更新コマンドが完了したら、管理PCのブラウザーへ戻って強制再読み込みし、状態確認後に開く。
+設定・NAT・mTLS・画面で保存したノード情報を維持して、アプリ本体・DNS・サービス定義をまとめて更新する。導入済みで稼働中または有効化済みのCaddyは、Webサービス起動後に自動で再起動・稼働確認する。**更新直後は「閉」**。更新コマンドが完了したら、管理PCのブラウザーへ戻って強制再読み込みし、状態確認後に開く。
 
 ## IP設定の訂正と再適用【RabbitWall導入先PCのローカルコンソール】
 
@@ -267,7 +267,7 @@ sudo python3 setup.py reconfigure --config rabbitwall.json --apply-network
 sudo python3 setup.py doctor
 ```
 
-IPやFirewall変更で切断されるため、SSH経由で実行しないでください。入力・Unbound設定・Firewallの検証後に、既存設定と稼働中のFirewallをバックアップします。NetworkManagerの2つの接続設定・ルーティング設定・Firewall・NAT・DNSを反映し、`/etc/rabbitwall.json` を保存してアプリとサービスも更新します。別途 `update` を実行する必要はありません。完了時の対外接続は **「閉」** です。管理接続とDNSを確認してから開いてください。
+IPやFirewall変更で切断されるため、SSH経由で実行しないでください。入力・Unbound設定・Firewallの検証後に、既存設定と稼働中のFirewallをバックアップします。NetworkManagerの2つの接続設定・ルーティング設定・Firewall・NAT・DNSを反映し、`/etc/rabbitwall.json` を保存してアプリとサービスも更新します。別途 `update` を実行する必要はありません。画面で保存した `/etc/rabbitwall-nodes/nodes.json` は解除し、指定JSONの `nodes` を適用します。必要なノードは事前に入力JSONへ転記してください。完了時の対外接続は **「閉」** です。管理接続とDNSを確認してから開いてください。
 
 mTLSの証明書・秘密鍵、操作キー、履歴は保持します。mTLS導入済みの場合、Caddyの待受IP・管理PCの制限・HTTPSのFirewallルールも再生成します。コンソールのホスト名を変更する場合は一致するサーバー証明書が必要で、不一致ならネットワーク変更前に停止します。上流側IPを変更した場合は管理PCのhosts／DNS登録を変更し、AI側IPを変更した場合はAI端末のゲートウェイとDNSも変更してください。NAT無効時は上流ルーターの静的経路も合わせます。
 

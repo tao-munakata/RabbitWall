@@ -21,7 +21,8 @@ from control import TOKEN, request_control
 from geoip import CountryLookup, DEFAULT_DATABASE
 from dns_observations import load_observations, domain_hints
 from traffic_analytics import collect_analytics
-from settings import SETTINGS, AI_INTERFACE, AI_IP, UPLINK_IP, metadata
+from settings import SETTINGS, AI_INTERFACE, AI_IP, UPLINK_IP, metadata, load
+import node_config
 
 AI = AI_INTERFACE.network
 LAN = ipaddress.ip_network(SETTINGS["management_cidr"])
@@ -285,6 +286,23 @@ def make_handler(state_path, port, demo=False, control_callback=None, token_file
             return dict(demo_control)
         return callback(action)
 
+    demo_config = json.loads(json.dumps(SETTINGS))
+    demo_lock = threading.Lock()
+
+    def nodes_status(payload=None):
+        nonlocal demo_config
+        if demo:
+            with demo_lock:
+                if payload is not None:
+                    demo_config = node_config.candidate(demo_config, payload)
+                    demo_control['nodes'] = [demo_control['nodes'][0], *[
+                        {'id':node['id'], 'name':node['label'], 'ip':node['ip'],
+                         'state':'up' if node.get('monitor',True) else 'disabled',
+                         'latency_ms':0.6, 'checked_at':utc_now(), 'last_success':utc_now()}
+                        for node in demo_config['nodes']]]
+                return node_config.document(demo_config)
+        return callback('nodes') if payload is None else callback('save_nodes', payload=payload)
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "RabbitWall"
 
@@ -335,8 +353,12 @@ def make_handler(state_path, port, demo=False, control_callback=None, token_file
         def do_POST(self):
             if not self.valid_request(mutation=True):
                 return
-            if urlsplit(self.path).path != "/api/internet":
+            path = urlsplit(self.path).path
+            if path not in {"/api/internet", "/api/nodes"}:
                 self.send_error(404)
+                return
+            if path == "/api/nodes" and not self.access_status()["can_control"]:
+                self.send_payload(403, {"error":"ノードの保存には証明書付きHTTPSで接続してください。"})
                 return
             if not demo:
                 try:
@@ -350,14 +372,26 @@ def make_handler(state_path, port, demo=False, control_callback=None, token_file
                     return
             try:
                 size = int(self.headers.get("Content-Length", "0"))
-                if not 0 < size <= 128 or self.headers.get_content_type() != "application/json":
+                if not 0 < size <= (12288 if path == "/api/nodes" else 128) or self.headers.get_content_type() != "application/json":
                     raise ValueError("invalid body")
                 self.connection.settimeout(3)
                 data = json.loads(self.rfile.read(size))
-                if not isinstance(data, dict) or set(data) != {"enabled"} or type(data["enabled"]) is not bool:
+                if path == "/api/nodes":
+                    if not isinstance(data, dict) or set(data) != {"nodes", "revision"}: raise ValueError("nodes and revision required")
+                elif not isinstance(data, dict) or set(data) != {"enabled"} or type(data["enabled"]) is not bool:
                     raise ValueError("enabled must be boolean")
             except (ValueError, OSError):
-                self.send_payload(400, {"error": "enabledにtrueまたはfalseを指定してください。"})
+                self.send_payload(400, {"error": "入力形式またはリクエストサイズが正しくありません。"})
+                return
+            if path == '/api/nodes':
+                try:
+                    self.send_payload(200, {'settings':nodes_status(data), 'demo':demo, 'auth':self.access_status()})
+                except node_config.RevisionConflict as exc:
+                    self.send_payload(409, {'error':str(exc)})
+                except ValueError as exc:
+                    self.send_payload(400, {'error':str(exc)})
+                except Exception as exc:
+                    self.send_payload(503, {'error':'保存結果を確認できません。再読み込みして確認してください。', 'detail':str(exc)[:300]})
                 return
             try:
                 status = control_status("enable" if data["enabled"] else "disable")
@@ -370,6 +404,12 @@ def make_handler(state_path, port, demo=False, control_callback=None, token_file
                 return
             path = urlsplit(self.path).path
             status = 200
+            if path == '/api/nodes':
+                try:
+                    self.send_payload(200, {'settings':nodes_status(), 'demo':demo, 'auth':self.access_status()})
+                except Exception as exc:
+                    self.send_payload(503, {'error':'ノード設定を読み込めません。', 'detail':str(exc)[:300]})
+                return
             if path == "/api/control":
                 try:
                     self.send_payload(200, {"control": control_status(), "demo": demo, "auth": self.access_status()})
@@ -380,7 +420,7 @@ def make_handler(state_path, port, demo=False, control_callback=None, token_file
                 try:
                     data = countries.enrich(demo_state() if demo else json.loads(state_path.read_text()))
                     age = (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(data["updated_at"])).total_seconds()
-                    data["network"] = metadata()
+                    data["network"] = metadata(demo_config if demo else load())
                     data["stale"] = age > max(20, data.get("interval", 5) * 3)
                     payload, mime = json.dumps(data, ensure_ascii=False).encode(), "application/json; charset=utf-8"
                 except (OSError, ValueError, KeyError, TypeError) as exc:

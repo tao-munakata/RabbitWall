@@ -57,10 +57,19 @@ def main():
         original_config = Path('/etc/rabbitwall.json').read_bytes()
         real_run(['nft', 'add', 'element', 'inet', 'rabbitwall_console', 'online_sources',
                   '{', '192.168.20.0/24', 'timeout', '20s', '}'], check=True)
-        deploy.deploy(config)
+        override_nodes = json.loads(json.dumps(config['nodes']))
+        override_nodes[-1].update(label='Renamed AI', allow_ssh=False, monitor=False)
+        overrides = Path('/etc/rabbitwall-nodes/nodes.json')
+        overrides.write_text(json.dumps({'nodes':override_nodes}))
+        saved_nodes = overrides.read_bytes()
+        deploy.deploy(setup.load())
+        assert overrides.read_bytes() == saved_nodes
+        assert 'ip daddr 192.168.20.10 tcp dport 22' not in Path('/etc/nftables.d/rabbitwall.nft').read_text()
         assert Path('/etc/rabbitwall/control.token').read_bytes() == token
         assert Path('/etc/rabbitwall.json').read_bytes() == original_config
         assert caddy.read_text() == 'local mTLS service sentinel'
+        assert calls.count(['systemctl','restart','rabbitwall-caddy']) == 1
+        assert calls.index(['systemctl','restart','rabbitwall-caddy']) > calls.index(['systemctl','restart','rabbitwall-web'])
         rules = real_run(['nft', '-j', 'list', 'set', 'inet', 'rabbitwall_console', 'online_sources'],
                          check=True, capture_output=True, text=True).stdout
         sets = [entry['set'] for entry in json.loads(rules)['nftables'] if 'set' in entry]
@@ -105,6 +114,7 @@ def main():
     assert '10.2.0.2' in Path('/etc/nftables.d/rabbitwall-web.nft').read_text()
     assert Path('/etc/nftables.conf').read_text().count('include "/etc/nftables.d/rabbitwall-web.nft"') == 1
     assert ['systemctl','restart','rabbitwall-caddy'] in calls
+    assert not Path('/etc/rabbitwall-nodes/nodes.json').exists()
     assert json.loads(Path('/etc/rabbitwall.json').read_text()) == corrected
     assert '10.2.0.2' in Path('/etc/nftables.conf').read_text()
     assert '192.168.10.2' not in Path('/etc/nftables.conf').read_text()

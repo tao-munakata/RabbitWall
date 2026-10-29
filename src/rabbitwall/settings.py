@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 
 CONFIG = Path('/etc/rabbitwall.json')
+NODES_CONFIG = Path('/etc/rabbitwall-nodes/nodes.json')
 DEFAULTS = {'schema_version': 1,
  'label': 'RabbitWall',
  'uplink_if': 'eth0',
@@ -21,8 +22,8 @@ DEFAULTS = {'schema_version': 1,
  'console_name': 'rabbitwall.home.arpa',
  'site_label': 'LAN拠点',
  'site_location': [139, 36],
- 'nodes': [{'id': 'gateway', 'label': 'Gateway', 'ip': '192.168.10.1', 'interface': 'eth0'},
-           {'id': 'ai-host', 'label': 'AI Host', 'ip': '192.168.20.10', 'interface': 'eth1'}]}
+ 'nodes': [{'id': 'gateway', 'label': 'Gateway', 'ip': '192.168.10.1', 'interface': 'eth0', 'monitor': True, 'allow_ssh': False, 'allow_ping': False},
+           {'id': 'ai-host', 'label': 'AI Host', 'ip': '192.168.20.10', 'interface': 'eth1', 'monitor': True, 'allow_ssh': True, 'allow_ping': True}]}
 
 
 def interface(value):
@@ -68,11 +69,11 @@ def validate(data):
     point = data['site_location']
     if not isinstance(point, list) or len(point) != 2 or any(type(x) not in (int, float) for x in point) or not -180 <= point[0] <= 180 or not -85 <= point[1] <= 85:
         raise ValueError('site_location must be [longitude, latitude]')
-    if not isinstance(data['nodes'], list) or not 1 <= len(data['nodes']) <= 12:
-        raise ValueError('Configure 1–12 monitored nodes')
+    if not isinstance(data['nodes'], list) or not 0 <= len(data['nodes']) <= 12:
+        raise ValueError('Configure 0–12 nodes')
     ids, addresses = {'rabbitwall', 'admin'}, {str(up.ip), str(ai.ip), result['admin_ip']}
     for node in data['nodes']:
-        if not isinstance(node, dict) or set(node) != {'id', 'label', 'ip', 'interface'}:
+        if not isinstance(node, dict) or not {'id', 'label', 'ip', 'interface'} <= set(node) or set(node) - {'id', 'label', 'ip', 'interface', 'monitor', 'allow_ssh', 'allow_ping'}:
             raise ValueError('Each node requires id, label, ip and interface')
         if not isinstance(node['id'], str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,31}', node['id']) or node['id'] in ids:
             raise ValueError('Node ids must be unique; rabbitwall and admin are reserved')
@@ -81,6 +82,12 @@ def validate(data):
         address = ipaddress.IPv4Address(node['ip'])
         if str(address) in addresses: raise ValueError('Node IPs must be unique')
         if node['interface'] not in (data['ai_if'], data['uplink_if']): raise ValueError('Node interface must match uplink_if or ai_if')
+        for flag in ('monitor', 'allow_ssh', 'allow_ping'):
+            default = True if flag == 'monitor' else node['interface'] == data['ai_if']
+            if type(node.get(flag, default)) is not bool: raise ValueError(f'{flag} must be boolean')
+            # Optional fields preserve the behavior of existing JSON configurations.
+        if node['interface'] == data['uplink_if'] and (node.get('allow_ssh', False) or node.get('allow_ping', False)):
+            raise ValueError('Management access applies only to AI-side nodes')
         node['ip'] = str(address)
         usable(node['ip'], ai.network if node['interface'] == data['ai_if'] else up.network)
         ids.add(node['id']); addresses.add(str(address))
@@ -91,13 +98,27 @@ def load(path=None):
     selected = Path(path or os.environ.get('RABBITWALL_CONFIG', CONFIG))
     if path is None and 'RABBITWALL_CONFIG' not in os.environ and not selected.exists():
         return validate(DEFAULTS)
-    return validate(json.loads(selected.read_text()))
+    data = json.loads(selected.read_text())
+    if path is None and NODES_CONFIG.exists():
+        override = json.loads(NODES_CONFIG.read_text())
+        if not isinstance(override, dict) or set(override) != {'nodes'}:
+            raise ValueError('Invalid saved node configuration')
+        data['nodes'] = override['nodes']
+    return validate(data)
 
 
 SETTINGS = load()
 AI_INTERFACE = ipaddress.IPv4Interface(SETTINGS['ai_cidr'])
 UPLINK_INTERFACE = ipaddress.IPv4Interface(SETTINGS['uplink_cidr'])
 AI_IP, UPLINK_IP = str(AI_INTERFACE.ip), str(UPLINK_INTERFACE.ip)
+
+
+def monitored(node):
+    return node.get('monitor', True)
+
+
+def management_allowed(node, kind, config=SETTINGS):
+    return node['interface'] == config['ai_if'] and node.get('allow_' + kind, True)
 
 
 def metadata(config=SETTINGS):

@@ -12,6 +12,8 @@ docs/OPERATIONS.ja.md
 docs/OPERATIONS.md
 docs/PROGRAM_FLOW.ja.md
 docs/PROGRAM_FLOW.md
+docs/OS_COMMANDS.ja.md
+docs/OS_COMMANDS.md
 docs/images/console.png
 docs/images/rabbitwall-hero.png
 examples/rabbitwall.example.json
@@ -26,6 +28,7 @@ src/rabbitwall/dnstap_observer.py
 src/rabbitwall/dnstap_pb2.py
 src/rabbitwall/firewall.py
 src/rabbitwall/geoip.py
+src/rabbitwall/node_config.py
 src/rabbitwall/settings.py
 src/rabbitwall/static/THIRD_PARTY.md
 src/rabbitwall/static/app.js
@@ -56,6 +59,7 @@ tests/test_environment.py
 tests/test_hardening.py
 tests/test_management.py
 tests/test_mtls.py
+tests/test_nodes.py
 tests/test_setup.py
 tests/unbound_smoke.py
 third_party/dnstap/README.md
