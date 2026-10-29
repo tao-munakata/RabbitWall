@@ -109,6 +109,7 @@ Webサービスはこれらのコマンドを直接実行しません。制御�
 | `rabbitwall-web` | `/usr/bin/python3 /opt/rabbitwall/console.py serve` |
 | `rabbitwall-dns` | `/usr/sbin/unbound -d -c /etc/rabbitwall-unbound.conf` |
 | `rabbitwall-dns-observer` | `/usr/bin/python3 -B /opt/rabbitwall/dnstap_observer.py` |
+| `rabbitwall-probe` | `/usr/bin/python3 -B /opt/rabbitwall/uplink_probe.py`。約30秒ごとに `ping -4 -n -q -c 4 -i 0.2 -W 1 <gateway>` を実行 |
 | `rabbitwall-caddy` | 事前に `caddy validate`、続いて `/usr/bin/caddy run --config /etc/rabbitwall-mtls/Caddyfile --adapter caddyfile` |
 
 定義は [systemd/](../systemd/) を参照。デモでは `setup.py` が実行中のPythonを使い、`<python> -B <source>/src/rabbitwall/console.py demo --port <port> --state-dir <dir>` を起動します。

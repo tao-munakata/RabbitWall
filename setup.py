@@ -224,7 +224,7 @@ def install(plan_dir, apply, reapply=False):
     (backup/'restore.sh').write_text('''#!/bin/sh
 set -eu
 base=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-systemctl disable --now rabbitwall-dns-observer rabbitwall-dns rabbitwall-web rabbitwall-control rabbitwall-collector rabbitwall-caddy 2>/dev/null || true
+systemctl disable --now rabbitwall-dns-observer rabbitwall-dns rabbitwall-web rabbitwall-control rabbitwall-collector rabbitwall-probe rabbitwall-caddy 2>/dev/null || true
 nft -f "$base/runtime.nft"
 if [ ! -f "$base/nftables-was-enabled" ]; then systemctl disable nftables; fi
 for file in /etc/nftables.conf /etc/rabbitwall.json /etc/nftables.d/rabbitwall.nft /etc/NetworkManager/conf.d/90-rabbitwall-ai.conf /etc/sysctl.d/90-rabbitwall-router.conf /etc/modules-load.d/rabbitwall-monitor.conf /etc/rabbitwall-mtls/Caddyfile /etc/nftables.d/rabbitwall-web.nft /etc/rabbitwall-unbound.conf /etc/rabbitwall-nodes/nodes.json; do
@@ -242,7 +242,7 @@ echo 'Saved configuration restored. Reboot locally to reactivate the original pr
 '''.replace('systemctl disable --now rabbitwall-', 'systemctl stop rabbitwall-' if reapply else 'systemctl disable --now rabbitwall-'));(backup/'restore.sh').chmod(0o700)
     print(f'Network backup and recovery: {backup}/restore.sh', flush=True)
     if reapply:
-        for service in ('rabbitwall-caddy','rabbitwall-web','rabbitwall-collector',
+        for service in ('rabbitwall-caddy','rabbitwall-web','rabbitwall-collector','rabbitwall-probe',
                         'rabbitwall-dns-observer','rabbitwall-dns','rabbitwall-control'):
             state = subprocess.check_output(['systemctl','show','-p','LoadState','--value',service],text=True).strip()
             if state != 'not-found': run('systemctl','stop',service)
@@ -288,7 +288,7 @@ def deploy_application(config):
 
 
 def doctor():
-    for name in ('nftables','rabbitwall-control','rabbitwall-dns','rabbitwall-dns-observer','rabbitwall-collector','rabbitwall-web','rabbitwall-caddy'):
+    for name in ('nftables','rabbitwall-control','rabbitwall-dns','rabbitwall-dns-observer','rabbitwall-probe','rabbitwall-collector','rabbitwall-web','rabbitwall-caddy'):
         subprocess.run(['systemctl','is-active',name],check=False)
     for args in [('ip','-br','-4','addr'),('ss','-lntup'),('nft','list','table','inet','rabbitwall_console')]:
         subprocess.run(args,check=False)

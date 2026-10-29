@@ -42,7 +42,7 @@ function direction(flow) {
   return flow.scope === "MANAGEMENT" ? rabbitwall ? "LAN → RabbitWall" : "LAN → AI" : flow.scope === "RABBITWALL" ? "RabbitWall発信" : rabbitwall ? "AI → RabbitWall" : "AI → 上流";
 }
 function navigate() {
-  const pages = {monitor:"広域通信監視",sessions:"通信記録一覧",settings:"環境設定",analytics:"通信分析"};
+  const pages = {monitor:"広域通信監視",sessions:"通信記録一覧",settings:"環境設定",analytics:"通信分析",uplink:"上流回線品質"};
   const page = Object.hasOwn(pages, location.hash.slice(1)) ? location.hash.slice(1) : "monitor";
   for (const element of document.querySelectorAll("[data-page]")) element.hidden = element.dataset.page !== page;
   for (const link of document.querySelectorAll("[data-nav]")) {
@@ -159,6 +159,7 @@ function render() {
   $("notice").hidden = !notices.length; $("notice").textContent = notices.join("\n");
   renderGeoip();
   renderAnalytics();
+  renderUplink();
   const search = $("search").value.toLowerCase(), scope = $("scope").value, proto = $("proto").value;
   const matches = f => (scope === "all" || (scope === "related" ? ["AI", "MANAGEMENT"].includes(f.scope) : f.scope === scope)) && (proto === "all" || f.proto === proto) &&
     [...(f.domain_hints || []).map(h => h.domain), f.src, f.dst, f.sport, f.dport, f.proto, f.service, f.state, f.chain, direction(f), countryText(f.src_country), countryText(f.dst_country)].join(" ").toLowerCase().includes(search);
@@ -241,6 +242,79 @@ function renderAnalytics() {
   }
   if (!data?.new_domains?.length) { const row=document.createElement("tr"); cell(row,"新しく観測したドメインはありません。","empty").colSpan=3; $("new-domain-rows").append(row); }
 }
+const UPLINK_KINDS = {gateway:"ゲートウェイ", dns:"上流DNS", internet:"インターネット"};
+function ms(value) { return Number.isFinite(value) ? (value < 10 ? value.toFixed(1) : Math.round(value)) + " ms" : "—"; }
+function internetMs(item) {
+  const values = (item?.internet || []).map(r => r.ms).filter(Number.isFinite);
+  return values.length ? values.reduce((a,b) => a+b, 0) / values.length : null;
+}
+function svgNode(name, attributes) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+  return node;
+}
+function renderUplinkChart(history) {
+  const svg = $("uplink-chart"), width = Math.max(320, Math.round(svg.clientWidth || 800)), height = 220, pad = {l:44, r:8, t:10, b:22};
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`); svg.replaceChildren();
+  if (history.length < 2) {
+    const text = svgNode("text", {x:width/2, y:height/2, "text-anchor":"middle", class:"chart-empty"});
+    text.textContent = "計測データを待っています…"; svg.append(text); return;
+  }
+  const series = [["gateway", item => item.gateway?.avg_ms, item => item.gateway?.error],
+                  ["dns", item => item.dns?.ms, item => item.dns?.error],
+                  ["internet", internetMs, item => (item.internet || []).some(r => r.error)]];
+  const times = history.map(item => Date.parse(item.time)), start = times[0], span = Math.max(1, times.at(-1) - start);
+  const values = history.flatMap(item => series.map(([, get]) => get(item))).filter(Number.isFinite);
+  const top = Math.max(5, ...values) * 1.15;
+  const x = t => pad.l + (t - start) / span * (width - pad.l - pad.r), y = v => pad.t + (1 - v / top) * (height - pad.t - pad.b);
+  for (const fraction of [0, 0.5, 1]) {
+    const v = top * fraction, line = svgNode("line", {x1:pad.l, x2:width-pad.r, y1:y(v), y2:y(v), class:"chart-grid"});
+    const label = svgNode("text", {x:pad.l-6, y:y(v)+4, "text-anchor":"end", class:"chart-axis"}); label.textContent = Math.round(v) + "ms";
+    svg.append(line, label);
+  }
+  for (const [index, at] of [[0, start], [1, times.at(-1)]]) {
+    const label = svgNode("text", {x:index ? width-pad.r : pad.l, y:height-6, "text-anchor":index ? "end" : "start", class:"chart-axis"});
+    label.textContent = clock(new Date(at).toISOString()); svg.append(label);
+  }
+  for (const [name, get, failed] of series) {
+    let path = "", pen = false;
+    history.forEach((item, i) => {
+      const v = get(item);
+      if (Number.isFinite(v)) { path += (pen ? "L" : "M") + x(times[i]).toFixed(1) + " " + y(v).toFixed(1); pen = true; } else pen = false;
+      if (failed(item)) { const mark = svgNode("text", {x:x(times[i]), y:height-pad.b-2, "text-anchor":"middle", class:"chart-fail"}); mark.textContent = "×"; svg.append(mark); }
+    });
+    if (path) svg.append(svgNode("path", {d:path, class:"chart-line series-" + name}));
+  }
+}
+function renderUplink() {
+  const data = snapshot.uplink, history = data?.history || [], latest = history.at(-1);
+  const stale = !data?.updated_at || (Date.now() - Date.parse(data.updated_at)) / 1000 > Math.max(90, (data.interval || 30) * 3);
+  const gateway = latest?.gateway, dns = latest?.dns;
+  $("uplink-gateway-target").textContent = gateway?.target || "—";
+  $("uplink-gateway").textContent = ms(gateway?.avg_ms);
+  $("uplink-gateway-detail").textContent = gateway ? gateway.error || `損失 ${gateway.loss_pct ?? "—"}% · ゆらぎ ${ms(gateway.jitter_ms)}` : "—";
+  $("uplink-dns-target").textContent = dns?.target || "—";
+  $("uplink-dns").textContent = ms(dns?.ms);
+  $("uplink-dns-detail").textContent = dns ? dns.error || dns.name : "—";
+  $("uplink-internet").textContent = ms(internetMs(latest));
+  $("uplink-internet-detail").textContent = (latest?.internet || []).map(r => r.target + " " + (r.error ? "失敗" : ms(r.ms))).join(" · ") || "—";
+  const hour = Date.now() - 3600e3, recent = history.filter(item => Date.parse(item.time) >= hour);
+  const errors = (data?.errors || []).filter(entry => Date.parse(entry.time) >= hour);
+  $("uplink-failures").textContent = data ? errors.length : "—";
+  $("uplink-updated").textContent = !data ? "計測サービス未稼働" : stale ? "計測データが古くなっています" : "最終計測 " + clock(data.updated_at);
+  for (const [id, bad] of [["uplink-gateway", gateway?.error], ["uplink-dns", dns?.error], ["uplink-internet", (latest?.internet || []).some(r => r.error)], ["uplink-failures", errors.length], ["uplink-updated", !data || stale]])
+    $(id).classList.toggle("uplink-bad", Boolean(bad));
+  $("uplink-period").textContent = data?.since ? "計測開始 " + new Date(data.since).toLocaleString("ja-JP", {hour12:false}) + " · 直近1時間" : "rabbitwall-probe サービスを確認してください";
+  renderUplinkChart(recent);
+  $("uplink-error-rows").replaceChildren();
+  for (const entry of (data?.errors || []).slice(0, 50)) {
+    const row = document.createElement("tr"); cell(row, new Date(entry.time).toLocaleString("ja-JP", {hour12:false}), "mono");
+    cell(row, UPLINK_KINDS[entry.kind] || entry.kind); cell(row, entry.target, "mono"); cell(row, entry.error); $("uplink-error-rows").append(row);
+  }
+  if (!data?.errors?.length) { const row = document.createElement("tr"); cell(row, "計測エラーはありません。", "empty").colSpan = 4; $("uplink-error-rows").append(row); }
+  $("uplink-error-count").textContent = data ? `保持 ${data.errors.length}件 · 最大50件` : "—";
+}
+window.addEventListener("resize", () => snapshot && location.hash === "#uplink" && renderUplink());
 for (const id of ["ranking-window", "ranking-group", "ranking-sort"]) $(id).addEventListener("change", () => snapshot && renderAnalytics());
 async function refresh() {
   try {

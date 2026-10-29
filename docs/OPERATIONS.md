@@ -7,6 +7,7 @@
 - **観 — Monitor:** traffic map, route list, monitored nodes and the AI network's Internet-access toggle.
 - **覧 — Sessions:** current connections, observed history and firewall rejection logs. Search by IP, domain, port, country or state.
 - **析 — Analytics:** traffic rankings and newly observed domains.
+- **線 — Uplink:** upstream line quality: gateway RTT, upstream DNS response and Internet connect time over the last hour, plus probe errors.
 - **設 — Settings:** color scheme and the status of the IP-country database.
 
 Sessions are collected about every five seconds; nodes are checked with Ping about every ten seconds. Short connections that finish between observations may not appear. Map animation indicates that a connection exists, not packet counts or transfer speed.
@@ -58,6 +59,16 @@ Traffic from the AI network to public IPv4 addresses is ranked over the last hou
 About every five seconds, differences are taken from cumulative conntrack counters and stored in one-minute buckets. The same cumulative value is not repeatedly added. The first observation establishes a baseline; a decrease in counters or a collection gap longer than 30 seconds also resets the baseline.
 
 When there is one candidate domain, multiple IPs for that name are grouped together. Traffic with multiple candidates is grouped by IP as “multiple candidates,” without counting its bytes against every candidate. Bytes transferred before the first observation, after the last observation, during collection gaps or by connections ending between observations are omitted. These figures are not precise billing measurements.
+
+## Uplink quality
+
+The `rabbitwall-probe` service measures the following from the RabbitWall host about every 30 seconds. It runs as an unprivileged dedicated user, does not change firewall rules, and measures regardless of whether the AI network is open or closed.
+
+- **Gateway:** four Pings to the configured `gateway`: average RTT, jitter and loss.
+- **Upstream DNS:** response time of a direct `example.com` A query to the configured `dns_upstream`.
+- **Internet:** TCP 443 connect time to `1.1.1.1` and `8.8.8.8`. The firewall does not allow ICMP to public addresses, so connect time stands in for Ping.
+
+If the gateway is healthy but DNS or Internet probes fail, look beyond the upstream router; if the gateway fails, look at the LAN side. Results are kept only in memory-backed `/run/rabbitwall-probe/uplink.json` (last hour, up to 50 errors) and are cleared on restart. Traceroute is not run because the firewall does not permit it.
 
 ## Storage and capacity
 
