@@ -259,9 +259,11 @@ class Gate(unittest.TestCase):
             original = "flush ruleset\ntable inet rabbitwall_filter {}\n"
             config.write_text(original)
             snippet = Path(directory) / "snippet.nft"
-            with patch.object(control, "nft", side_effect=RuntimeError("syntax error")):
-                with self.assertRaises(RuntimeError):
+            nodes_config = Path(directory) / "nodes" / "nodes.json"
+            with patch.object(control, "NODES_CONFIG", nodes_config), patch.object(control, "nft", side_effect=RuntimeError("syntax error")) as nft:
+                with self.assertRaisesRegex(RuntimeError, "syntax error"):
                     control.install_persistent(config, snippet, Path(directory) / "token")
+            nft.assert_called_once()
             self.assertEqual(config.read_text(), original)
             self.assertFalse(snippet.exists())
 
