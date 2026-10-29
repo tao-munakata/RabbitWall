@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVICES = ('rabbitwall-control', 'rabbitwall-dns', 'rabbitwall-dns-observer', 'rabbitwall-collector', 'rabbitwall-web')
+SERVICES = ('rabbitwall-control', 'rabbitwall-dns', 'rabbitwall-dns-observer', 'rabbitwall-probe', 'rabbitwall-collector', 'rabbitwall-web')
 
 
 def run(*args):
@@ -80,13 +80,14 @@ def deploy(config):
             destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             shutil.copy2(target, destination)
     print(f'Application backup: {backup}', flush=True)
-    for group in ('rabbitwall-control', 'rabbitwall-dns', 'rabbitwall-read'):
+    for group in ('rabbitwall-control', 'rabbitwall-dns', 'rabbitwall-probe', 'rabbitwall-read'):
         try: grp.getgrnam(group)
         except KeyError: run('groupadd', '--system', group)
-    try: pwd.getpwnam('rabbitwall-dns')
-    except KeyError:
-        run('useradd', '--system', '--gid', 'rabbitwall-dns', '--no-create-home',
-            '--shell', '/usr/sbin/nologin', 'rabbitwall-dns')
+    for user in ('rabbitwall-dns', 'rabbitwall-probe'):
+        try: pwd.getpwnam(user)
+        except KeyError:
+            run('useradd', '--system', '--gid', user, '--no-create-home',
+                '--shell', '/usr/sbin/nologin', user)
     state = Path('/var/lib/rabbitwall')
     state.mkdir(parents=True, exist_ok=True)
     os.chown(state, 0, grp.getgrnam('rabbitwall-read').gr_gid)

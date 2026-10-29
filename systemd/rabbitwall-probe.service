@@ -1,0 +1,34 @@
+[Unit]
+Description=RabbitWall unprivileged uplink quality probe
+After=network-online.target nftables.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rabbitwall-probe
+Group=rabbitwall-probe
+RuntimeDirectory=rabbitwall-probe
+RuntimeDirectoryMode=0750
+ExecStart=/usr/bin/python3 -B /opt/rabbitwall/uplink_probe.py
+Restart=on-failure
+RestartSec=5
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+# Unprivileged ping uses ICMP datagram sockets (net.ipv4.ping_group_range).
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/run/rabbitwall-probe
+UMask=0027
+MemoryMax=64M
+TasksMax=8
+LimitNOFILE=64
+
+[Install]
+WantedBy=multi-user.target

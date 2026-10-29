@@ -21,6 +21,7 @@ from control import TOKEN, request_control
 from geoip import CountryLookup, DEFAULT_DATABASE
 from dns_observations import load_observations, domain_hints
 from traffic_analytics import collect_analytics
+from uplink_probe import load_uplink, demo_uplink
 from settings import SETTINGS, AI_INTERFACE, AI_IP, UPLINK_IP, metadata, load
 import node_config
 
@@ -202,7 +203,7 @@ def collect_once(db, state_path, interval):
     atomic_json(state_path, {"updated_at": now, "interval": interval, "demo": False,
                             "collector_ok": error is None, "errors": errors,
                             "flows": flows, "history": history, "analytics": analytics,
-                            "drops": parse_journal(journal)[:200]})
+                            "uplink": load_uplink(), "drops": parse_journal(journal)[:200]})
 
 
 def demo_state():
@@ -229,6 +230,7 @@ def demo_state():
     demo_db.close()
     return {"analytics": analytics, "updated_at": now, "interval": 5, "demo": True, "collector_ok": True,
             "errors": [], "flows": flows, "history": [dict(f, ended_at=None) for f in flows],
+            "uplink": demo_uplink(SETTINGS),
             "drops": [{"time": now, "scope": "AI", "chain": "forward", "src": next((n['ip'] for n in SETTINGS['nodes'] if n['interface']==SETTINGS['ai_if']), AI_IP),
                        "dst": SETTINGS['admin_ip'], "proto": "TCP", "sport": "50123", "dport": "22",
                        "in": SETTINGS["ai_if"], "out": SETTINGS["uplink_if"]}]}

@@ -109,6 +109,7 @@ Sources: [install_mtls.py](../tools/install_mtls.py), [setup.py](../setup.py). C
 | `rabbitwall-web` | `/usr/bin/python3 /opt/rabbitwall/console.py serve` |
 | `rabbitwall-dns` | `/usr/sbin/unbound -d -c /etc/rabbitwall-unbound.conf` |
 | `rabbitwall-dns-observer` | `/usr/bin/python3 -B /opt/rabbitwall/dnstap_observer.py` |
+| `rabbitwall-probe` | `/usr/bin/python3 -B /opt/rabbitwall/uplink_probe.py`; runs `ping -4 -n -q -c 4 -i 0.2 -W 1 <gateway>` about every 30 seconds |
 | `rabbitwall-caddy` | First `caddy validate`, then `/usr/bin/caddy run --config /etc/rabbitwall-mtls/Caddyfile --adapter caddyfile` |
 
 See [systemd/](../systemd/) for definitions. The demo uses the Python running `setup.py` to launch `<python> -B <source>/src/rabbitwall/console.py demo --port <port> --state-dir <dir>`.

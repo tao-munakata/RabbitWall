@@ -38,12 +38,15 @@ src/rabbitwall/static/style.css
 src/rabbitwall/static/world.json
 src/rabbitwall/traffic_analytics.py
 src/rabbitwall/unbound_config.py
+src/rabbitwall/uplink_probe.py
 systemd/rabbitwall-caddy.service
 systemd/rabbitwall-collector.service
 systemd/rabbitwall-collector.service.d/dns.conf
+systemd/rabbitwall-collector.service.d/probe.conf
 systemd/rabbitwall-control.service
 systemd/rabbitwall-dns-observer.service
 systemd/rabbitwall-dns.service
+systemd/rabbitwall-probe.service
 systemd/rabbitwall-web.service
 tests/Dockerfile
 tests/deployment_smoke.py
@@ -61,6 +64,7 @@ tests/test_management.py
 tests/test_mtls.py
 tests/test_nodes.py
 tests/test_setup.py
+tests/test_uplink.py
 tests/unbound_smoke.py
 third_party/dnstap/README.md
 third_party/dnstap/dnstap.proto
